@@ -143,38 +143,108 @@ fn is_mouse_button(key: Key) -> bool {
 
 // ── Device discovery ──────────────────────────────────────────────────────────
 
-pub fn find_mouse() -> anyhow::Result<PathBuf> {
-    find_device("mouse", |dev| {
-        dev.supported_relative_axes()
-            .map(|a| a.contains(RelativeAxisType::REL_X) && a.contains(RelativeAxisType::REL_Y))
-            .unwrap_or(false)
-    })
+fn is_ignored_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("manguesechee")
+        || lower.contains("virtual")
+        || lower.contains("uinput")
+        || lower.contains("stylus")
+        || lower.contains("unknown")
+        || lower.contains("power button")
+        || lower.contains("sleep button")
+        || lower.contains("video bus")
+        || lower.contains("hotkey")
+        || lower.contains("lid switch")
+        || lower.contains("earpods")
+        || lower.contains("headphone")
+        || lower.contains("mic")
+        || lower.contains("speaker")
 }
 
-pub fn find_keyboard() -> anyhow::Result<PathBuf> {
-    find_device("keyboard", |dev| {
-        dev.supported_keys()
-            .map(|k| k.contains(Key::KEY_A))
-            .unwrap_or(false)
-    })
-}
-
-fn find_device(label: &str, predicate: impl Fn(&evdev::Device) -> bool) -> anyhow::Result<PathBuf> {
+fn sorted_event_entries() -> anyhow::Result<Vec<std::fs::DirEntry>> {
     let mut entries: Vec<_> = std::fs::read_dir("/dev/input")
         .context("read /dev/input")?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with("event"))
         .collect();
-    entries.sort_by_key(|e| e.file_name());
 
+    // Natural numeric sort: event0, event1, ..., event9, event10, ...
+    entries.sort_by_key(|e| {
+        e.file_name()
+            .to_str()
+            .and_then(|s| s.strip_prefix("event"))
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(u32::MAX)
+    });
+    Ok(entries)
+}
+
+pub fn find_all_mice() -> Vec<PathBuf> {
+    let entries = match sorted_event_entries() {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut mice = Vec::new();
     for entry in entries {
         let path = entry.path();
         if let Ok(device) = evdev::Device::open(&path) {
-            if predicate(&device) {
-                info!("found {label}: {} ({})", path.display(), device.name().unwrap_or("<unknown>"));
-                return Ok(path);
+            let name = device.name().unwrap_or("<unknown>");
+            if is_ignored_device(name) {
+                continue;
+            }
+            let has_rel = device
+                .supported_relative_axes()
+                .map(|a| a.contains(RelativeAxisType::REL_X) && a.contains(RelativeAxisType::REL_Y))
+                .unwrap_or(false);
+            let has_btn = device
+                .supported_keys()
+                .map(|k| k.contains(Key::BTN_LEFT))
+                .unwrap_or(false);
+
+            if has_rel && has_btn {
+                info!("found mouse: {} ({})", path.display(), name);
+                mice.push(path);
             }
         }
     }
-    anyhow::bail!("no {label} found in /dev/input — is your user in the 'input' group?")
+    mice
+}
+
+pub fn find_all_keyboards() -> Vec<PathBuf> {
+    let entries = match sorted_event_entries() {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut keyboards = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        if let Ok(device) = evdev::Device::open(&path) {
+            let name = device.name().unwrap_or("<unknown>");
+            if is_ignored_device(name) {
+                continue;
+            }
+            let has_alpha = device
+                .supported_keys()
+                .map(|k| {
+                    k.contains(Key::KEY_A)
+                        && k.contains(Key::KEY_Z)
+                        && k.contains(Key::KEY_ENTER)
+                })
+                .unwrap_or(false);
+
+            if has_alpha {
+                info!("found keyboard: {} ({})", path.display(), name);
+                keyboards.push(path);
+            }
+        }
+    }
+    keyboards
+}
+
+pub fn find_mouse() -> anyhow::Result<PathBuf> {
+    find_all_mice().into_iter().next().context("no mouse found in /dev/input")
+}
+
+pub fn find_keyboard() -> anyhow::Result<PathBuf> {
+    find_all_keyboards().into_iter().next().context("no keyboard found in /dev/input")
 }

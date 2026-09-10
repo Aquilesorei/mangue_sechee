@@ -24,7 +24,7 @@ pub enum MouseButton {
 /// Linux evdev key code (matches `evdev::Key` values directly).
 /// Using the raw u16 avoids a giant translation table and keeps
 /// the protocol independent of higher-level keysym layers.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct KeyCode(pub u16);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

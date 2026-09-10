@@ -83,12 +83,14 @@ async fn main() -> anyhow::Result<()> {
         }
     ));
     let (connect_tx, mut connect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<manguesechee_core::protocol::Message>(16);
 
     {
         let state = Arc::clone(&ipc_state);
         let ctx = connect_tx.clone();
+        let b_tx = broadcast_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = ipc_server::run(state, ctx).await {
+            if let Err(e) = ipc_server::run(state, ctx, b_tx).await {
                 tracing::error!("IPC server: {e:#}");
             }
         });
@@ -121,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         let deadzone = cfg.input.corner_deadzone_px;
         let delay    = cfg.input.switch_delay_ms;
         let state  = Arc::clone(&ipc_state);
+        let b_tx   = broadcast_tx.clone();
 
         tokio::spawn(async move {
             while let Some(addr) = connect_rx.recv().await {
@@ -129,12 +132,14 @@ async fn main() -> anyhow::Result<()> {
                 let mouse = mouse.clone();
                 let kb = kb.clone();
                 let state = Arc::clone(&state);
+                let b_tx = b_tx.clone();
                 info!("Starting controller connection to {addr}");
 
                 tokio::spawn(async move {
                     state.lock().unwrap().connected_to = Some(addr.clone());
-                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, Arc::clone(&state)).await {
+                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, Arc::clone(&state), b_tx).await {
                         tracing::error!("controller session to {addr} failed: {e:#}");
+                        state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
                     }
                     state.lock().unwrap().connected_to = None;
                 });
@@ -147,7 +152,16 @@ async fn main() -> anyhow::Result<()> {
         let _ = connect_tx.send(addr);
     }
 
-    server::run(listener, local_name, local_id, opts.screen_width, opts.screen_height).await;
+    server::run(
+        listener,
+        local_name,
+        local_id,
+        opts.screen_width,
+        opts.screen_height,
+        Arc::clone(&ipc_state),
+        connect_tx.clone(),
+        broadcast_tx.clone(),
+    ).await;
     Ok(())
 }
 

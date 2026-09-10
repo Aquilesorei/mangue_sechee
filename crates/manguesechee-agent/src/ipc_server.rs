@@ -13,6 +13,7 @@ pub struct AgentState {
     pub connected_to:  Option<String>,
     pub discovery:     bool,
     pub cursor_locked: bool,
+    pub last_error:    Option<String>,
     pub peers:         Vec<PeerInfo>,
 }
 
@@ -36,8 +37,9 @@ impl Drop for PidGuard {
 }
 
 pub async fn run(
-    state: SharedState,
-    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    state:        SharedState,
+    connect_tx:   tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx: tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
 ) -> anyhow::Result<()> {
     let path = ipc::socket_path();
     if let Some(p) = path.parent() { std::fs::create_dir_all(p)?; }
@@ -49,8 +51,9 @@ pub async fn run(
         let (stream, _) = listener.accept().await?;
         let state = Arc::clone(&state);
         let connect_tx = connect_tx.clone();
+        let broadcast_tx = broadcast_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, state, connect_tx).await {
+            if let Err(e) = handle_client(stream, state, connect_tx, broadcast_tx).await {
                 warn!("IPC client: {e}");
             }
         });
@@ -58,15 +61,16 @@ pub async fn run(
 }
 
 async fn handle_client(
-    stream: tokio::net::UnixStream,
-    state:  SharedState,
-    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    stream:       tokio::net::UnixStream,
+    state:        SharedState,
+    connect_tx:   tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx: tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     while let Some(line) = lines.next_line().await? {
         let event = match serde_json::from_str::<GuiCommand>(&line) {
-            Ok(cmd) => handle_command(cmd, &state, &connect_tx),
+            Ok(cmd) => handle_command(cmd, &state, &connect_tx, &broadcast_tx),
             Err(e)  => AgentEvent::Error { message: e.to_string() },
         };
         let mut resp = serde_json::to_string(&event)?;
@@ -77,9 +81,10 @@ async fn handle_client(
 }
 
 fn handle_command(
-    cmd: GuiCommand,
-    state: &SharedState,
-    connect_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    cmd:          GuiCommand,
+    state:        &SharedState,
+    connect_tx:   &tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx: &tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
 ) -> AgentEvent {
     match cmd {
         GuiCommand::GetStatus => {
@@ -89,11 +94,13 @@ fn handle_command(
                 connected_to:  s.connected_to.clone(),
                 discovery:     s.discovery,
                 cursor_locked: s.cursor_locked,
+                last_error:    s.last_error.clone(),
                 peers:         s.peers.clone(),
             }
         }
         GuiCommand::Connect { address } => {
             info!("IPC: connect requested to {address}");
+            state.lock().unwrap().last_error = None;
             let _ = connect_tx.send(address);
             AgentEvent::Ok
         }
@@ -127,6 +134,28 @@ fn handle_command(
                 cfg.peers.retain(|p| p.address.as_deref() != Some(&address));
                 let _ = manguesechee_core::config::save(&cfg);
             }
+            AgentEvent::Ok
+        }
+        GuiCommand::SyncTopology { address, position } => {
+            info!("IPC: sync topology for {address}: {position}");
+            let pos_clean = position.trim().to_lowercase();
+            {
+                let mut s = state.lock().unwrap();
+                for p in &mut s.peers {
+                    if p.address == address || address.contains(&p.address) {
+                        p.position = pos_clean.clone();
+                    }
+                }
+            }
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                for p in &mut cfg.peers {
+                    if p.address.as_deref().unwrap_or("") == address || address.contains(p.address.as_deref().unwrap_or("!@#$")) {
+                        p.position = pos_clean.clone();
+                    }
+                }
+                let _ = manguesechee_core::config::save(&cfg);
+            }
+            let _ = broadcast_tx.send(manguesechee_core::protocol::Message::TopologySync { position: pos_clean });
             AgentEvent::Ok
         }
         GuiCommand::Shutdown => {

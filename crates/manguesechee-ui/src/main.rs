@@ -210,11 +210,18 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            if let Ok(_) = config::save(&cfg) {
-                w.set_setting_peer_pos(pos_clean.clone().into());
-                w.set_settings_feedback(format!("✓ Topology updated: Peer positioned on the {pos_clean}").into());
-                restart_agent_service();
-            }
+            let _ = config::save(&cfg);
+            w.set_setting_peer_pos(pos_clean.clone().into());
+            w.set_settings_feedback(format!("✓ Topology synced: Peer positioned on the {pos_clean}").into());
+
+            // Sync live over IPC to agent & network broadcast to peer
+            let target_addr = cfg.peers.first()
+                .and_then(|p| p.address.clone())
+                .unwrap_or_default();
+            send_ipc(ipc::GuiCommand::SyncTopology {
+                address: target_addr,
+                position: pos_clean.clone(),
+            });
         });
     }
 
@@ -241,15 +248,16 @@ fn main() -> anyhow::Result<()> {
             } else {
                 fetch_journal_logs().join("\n")
             };
+            let _ = std::fs::write("/tmp/manguesechee-latest-logs.txt", &all_text);
             let success = copy_to_clipboard(&all_text);
             if success {
-                w.set_logs_feedback("✓ Copied to clipboard!".into());
+                w.set_logs_feedback("✓ Copied! (Saved: /tmp/manguesechee-latest-logs.txt)".into());
             } else {
-                w.set_logs_feedback("⚠ Copy failed".into());
+                w.set_logs_feedback("Saved to /tmp/manguesechee-latest-logs.txt".into());
             }
 
             let w_feedback = w.as_weak();
-            slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
+            slint::Timer::single_shot(std::time::Duration::from_secs(4), move || {
                 if let Some(w) = w_feedback.upgrade() {
                     w.set_logs_feedback("".into());
                 }
@@ -414,8 +422,11 @@ fn main() -> anyhow::Result<()> {
                     });
                 }
                 let _ = config::save(&cfg);
-                restart_agent_service();
             }
+            send_ipc(ipc::GuiCommand::SyncTopology {
+                address: addr_str.clone(),
+                position: pos_str.clone(),
+            });
             let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
             for p in &mut peers {
                 if p.address == addr_str.as_str() || addr_str.contains(p.address.as_str()) {
@@ -424,7 +435,7 @@ fn main() -> anyhow::Result<()> {
             }
             w.set_peers(peers.as_slice().into());
             w.set_setting_peer_pos(pos_str.clone().into());
-            w.set_settings_feedback(format!("✓ Position updated: peer placed on the {pos_str}").into());
+            w.set_settings_feedback(format!("✓ Position updated & synced: peer placed on the {pos_str}").into());
         });
     }
 
@@ -434,6 +445,7 @@ fn main() -> anyhow::Result<()> {
         window.on_connect_requested(move |addr| {
             send_ipc(ipc::GuiCommand::Connect { address: addr.to_string() });
             if let Some(w) = w.upgrade() {
+                w.set_connection_error("".into());
                 w.set_status(format!("Connecting to {addr}…").into());
             }
         });
@@ -443,7 +455,16 @@ fn main() -> anyhow::Result<()> {
         window.on_disconnect_requested(move || {
             send_ipc(ipc::GuiCommand::Disconnect);
             if let Some(w) = w.upgrade() {
+                w.set_connected_peer("".into());
                 w.set_status("Disconnected".into());
+            }
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_dismiss_error(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_connection_error("".into());
             }
         });
     }
@@ -472,7 +493,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, peers, cursor_locked,
+                    local_name, connected_to, discovery, peers, cursor_locked, last_error,
                 }) = poll_status()
                 {
                     w.set_local_name(local_name.into());
@@ -482,6 +503,27 @@ fn main() -> anyhow::Result<()> {
                         Some(p) => format!("Forwarding → {p}").into(),
                         None    => "Ready".into(),
                     });
+
+                    // Connection error update
+                    if let Some(err) = last_error {
+                        w.set_connection_error(err.into());
+                    }
+
+                    // Connected peer detection
+                    let active_peer_info = peers.iter().find(|p| p.connected);
+                    if let Some(ref p) = connected_to {
+                        let peer_name = peers.iter()
+                            .find(|item| item.address == *p || p.contains(&item.address))
+                            .map(|item| item.name.clone())
+                            .unwrap_or_else(|| p.clone());
+                        w.set_connected_peer(format!("{peer_name} ({p})").into());
+                        w.set_connection_error("".into());
+                    } else if let Some(p) = active_peer_info {
+                        w.set_connected_peer(format!("{} ({})", p.name, p.address).into());
+                        w.set_connection_error("".into());
+                    } else {
+                        w.set_connected_peer("".into());
+                    }
 
                     let current_peers: Vec<PeerEntry> = w.get_peers().iter().collect();
                     let default_pos = w.get_setting_peer_pos().to_string();
@@ -644,15 +686,34 @@ fn fetch_journal_logs() -> Vec<String> {
     }
 }
 
+static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+
 fn copy_to_clipboard(text: &str) -> bool {
-    // 1. Native / cross-platform via arboard
-    if let Ok(mut board) = arboard::Clipboard::new() {
-        if board.set_text(text).is_ok() {
-            return true;
+    let mut copied = false;
+
+    // 1. Native cross-platform via arboard with Wayland data-control support
+    // Keeping CLIPBOARD alive in static Mutex ensures Wayland data source thread
+    // stays alive to serve paste requests when user switches windows.
+    if let Ok(mut guard) = CLIPBOARD.lock() {
+        if guard.is_none() {
+            *guard = arboard::Clipboard::new().ok();
+        }
+        if let Some(board) = guard.as_mut() {
+            if board.set_text(text).is_ok() {
+                copied = true;
+            } else {
+                // Reconnect clipboard if compositor connection dropped
+                *guard = arboard::Clipboard::new().ok();
+                if let Some(board) = guard.as_mut() {
+                    if board.set_text(text).is_ok() {
+                        copied = true;
+                    }
+                }
+            }
         }
     }
 
-    // 2. Wayland native fallback via wl-copy
+    // 2. Wayland native fallback via wl-copy (standard on COSMIC & wlroots)
     if let Ok(mut child) = Command::new("wl-copy")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -663,11 +724,8 @@ fn copy_to_clipboard(text: &str) -> bool {
             use std::io::Write;
             let _ = stdin.write_all(text.as_bytes());
             drop(stdin);
-            if let Ok(status) = child.wait() {
-                if status.success() {
-                    return true;
-                }
-            }
+            let _ = child.wait();
+            copied = true;
         }
     }
 
@@ -683,15 +741,29 @@ fn copy_to_clipboard(text: &str) -> bool {
             use std::io::Write;
             let _ = stdin.write_all(text.as_bytes());
             drop(stdin);
-            if let Ok(status) = child.wait() {
-                if status.success() {
-                    return true;
-                }
-            }
+            let _ = child.wait();
+            copied = true;
         }
     }
 
-    false
+    // 4. Fallback via xsel
+    if let Ok(mut child) = Command::new("xsel")
+        .args(["--clipboard", "--input"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(text.as_bytes());
+            drop(stdin);
+            let _ = child.wait();
+            copied = true;
+        }
+    }
+
+    copied
 }
 
 fn restart_agent_service() {

@@ -23,6 +23,7 @@ pub enum GuiCommand {
     SetDiscovery { enabled: bool },
     SetCursorLock { locked: bool },
     ForgetPeer { address: String },
+    SyncTopology { address: String, position: String },
     Shutdown,
 }
 
@@ -34,6 +35,7 @@ pub enum AgentEvent {
         connected_to:  Option<String>,
         discovery:     bool,
         cursor_locked: bool,
+        last_error:    Option<String>,
         peers:         Vec<PeerInfo>,
     },
     Ok,

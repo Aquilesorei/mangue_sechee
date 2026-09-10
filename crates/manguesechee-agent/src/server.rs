@@ -18,6 +18,9 @@ pub async fn run(
     local_id:      String,
     screen_width:  u32,
     screen_height: u32,
+    ipc_state:     crate::ipc_server::SharedState,
+    connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
 ) {
     info!("listening on {}", listener.local_addr().unwrap());
     loop {
@@ -26,8 +29,11 @@ pub async fn run(
                 info!("incoming from {peer_addr}");
                 let name = local_name.clone();
                 let id   = local_id.clone();
+                let state = std::sync::Arc::clone(&ipc_state);
+                let tx = connect_tx.clone();
+                let b_tx = broadcast_tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle(stream, name, id, screen_width, screen_height).await {
+                    if let Err(e) = handle(stream, peer_addr, name, id, screen_width, screen_height, state, tx, b_tx).await {
                         error!("session error from {peer_addr}: {e:#}");
                     }
                 });
@@ -39,10 +45,14 @@ pub async fn run(
 
 async fn handle(
     stream:        tokio::net::TcpStream,
+    peer_addr:     std::net::SocketAddr,
     local_name:    String,
     local_id:      String,
     screen_width:  u32,
     screen_height: u32,
+    ipc_state:     crate::ipc_server::SharedState,
+    connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
 ) -> anyhow::Result<()> {
     let mut transport = wrap(stream);
 
@@ -91,6 +101,49 @@ async fn handle(
         info!("peer already known — skipping pairing");
     }
 
+    // ── Auto-register peer & auto-connect bidirectional controller ───────────
+    let peer_ip = peer_addr.ip().to_string();
+    let peer_target_addr = format!("{peer_ip}:24800");
+
+    {
+        let mut s = ipc_state.lock().unwrap();
+        if let Some(existing) = s.peers.iter_mut().find(|p| p.address.contains(&peer_ip) || p.name == _peer_name) {
+            existing.paired = true;
+            if !existing.address.contains(':') {
+                existing.address = peer_target_addr.clone();
+            }
+        } else {
+            s.peers.push(manguesechee_core::ipc::PeerInfo {
+                name: _peer_name.clone(),
+                address: peer_target_addr.clone(),
+                paired: true,
+                connected: false,
+                position: "left".to_string(),
+            });
+        }
+    }
+
+    if let Ok(mut cfg) = manguesechee_core::config::load() {
+        if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(&peer_ip)) {
+            cfg.peers.push(manguesechee_core::config::PeerConfig {
+                id: peer_id.clone(),
+                address: Some(peer_target_addr.clone()),
+                position: "left".to_string(),
+            });
+            let _ = manguesechee_core::config::save(&cfg);
+        }
+
+        // If local machine is configured for bidirectional operation (input enabled)
+        // and not already controlling a peer, auto-connect back to this peer!
+        if cfg.input.enabled {
+            let already_connected = ipc_state.lock().unwrap().connected_to.is_some();
+            if !already_connected {
+                info!("Bidirectional auto-connect: initiating reverse controller connection to {peer_target_addr}");
+                let _ = connect_tx.send(peer_target_addr);
+            }
+        }
+    }
+
     // ── Split + virtual devices ───────────────────────────────────────────────
     let (mut sender, mut receiver) = transport.into_split();
     let mut mouse = match MouseInjector::new() {
@@ -111,11 +164,19 @@ async fn handle(
 
     let mut edge = EdgeDetector::new(screen_width, screen_height);
 
-    // Outbound channel — ReturnControl and Pong both go here
+    // Outbound channel — ReturnControl, Pong, and broadcast messages go here
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(8);
+    let mut broadcast_rx = broadcast_tx.subscribe();
     tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            if let Err(e) = sender.send(&msg).await { warn!("send: {e}"); break; }
+        loop {
+            tokio::select! {
+                Some(msg) = out_rx.recv() => {
+                    if let Err(e) = sender.send(&msg).await { warn!("send: {e}"); break; }
+                }
+                Ok(msg) = broadcast_rx.recv() => {
+                    if let Err(e) = sender.send(&msg).await { warn!("broadcast send: {e}"); break; }
+                }
+            }
         }
     });
 
@@ -151,6 +212,27 @@ async fn handle(
                 info!("← ClipboardSync ({} bytes)", text.len());
                 if let Err(e) = clipboard::set_text(&text) {
                     warn!("clipboard set failed: {e}");
+                }
+            }
+
+            Message::TopologySync { position } => {
+                let opp = manguesechee_core::protocol::opposite_position(&position).to_string();
+                info!("received TopologySync: peer set our position to {position} -> setting peer to {opp}");
+                {
+                    let mut s = ipc_state.lock().unwrap();
+                    for p in &mut s.peers {
+                        if p.address.contains(&peer_ip) || p.name == _peer_name {
+                            p.position = opp.clone();
+                        }
+                    }
+                }
+                if let Ok(mut cfg) = manguesechee_core::config::load() {
+                    for p in &mut cfg.peers {
+                        if p.address.as_deref().unwrap_or("").contains(&peer_ip) {
+                            p.position = opp.clone();
+                        }
+                    }
+                    let _ = manguesechee_core::config::save(&cfg);
                 }
             }
 

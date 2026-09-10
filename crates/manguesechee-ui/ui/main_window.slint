@@ -34,6 +34,9 @@ export component MainWindow inherits Window {
     in-out property <bool>        cursor-locked:      false;
     in-out property <[PeerEntry]> peers:              [];
     in-out property <[string]>    log-lines:          [];
+    in-out property <string>      connected-peer:     "";
+    in-out property <string>      connection-error:   "";
+    callback dismiss-error();
 
     // ── Wizard Properties ───────────────────────────────────────────────────
     in-out property <int>         wizard-role:  0;
@@ -363,6 +366,61 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // ── Connection Success Banner with Jump to Topology ──────────
+                    if root.connected-peer != "" : Rectangle {
+                        background: #0f2e1b; border-radius: 8px; border-width: 1px; border-color: #22c55e;
+                        HorizontalBox {
+                            padding: 12px; spacing: 14px;
+                            Rectangle {
+                                width: 10px; height: 10px; border-radius: 5px; background: #22c55e;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            VerticalBox {
+                                spacing: 2px; horizontal-stretch: 1;
+                                Text {
+                                    text: "✓ Connected to " + root.connected-peer;
+                                    font-size: 14px; font-weight: 700; color: #4ade80;
+                                }
+                                Text {
+                                    text: "Seamless control is active! Click below to arrange your screen layout.";
+                                    font-size: 12px; color: #a7f3d0;
+                                }
+                            }
+                            Button {
+                                text: "📐 Configure Screen Topology →";
+                                primary: true;
+                                clicked => { root.active-tab = 1; }
+                            }
+                        }
+                    }
+
+                    // ── Connection Error Banner ───────────────────────────────────
+                    if root.connection-error != "" : Rectangle {
+                        background: #3b1114; border-radius: 8px; border-width: 1px; border-color: #ef4444;
+                        HorizontalBox {
+                            padding: 12px; spacing: 14px;
+                            Rectangle {
+                                width: 10px; height: 10px; border-radius: 5px; background: #ef4444;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            VerticalBox {
+                                spacing: 2px; horizontal-stretch: 1;
+                                Text {
+                                    text: "⚠ Connection Failed";
+                                    font-size: 14px; font-weight: 700; color: #f87171;
+                                }
+                                Text {
+                                    text: root.connection-error;
+                                    font-size: 12px; color: #fca5a5;
+                                }
+                            }
+                            Button {
+                                text: "Dismiss";
+                                clicked => { root.connection-error = ""; root.dismiss-error(); }
+                            }
+                        }
+                    }
+
                     // Direct Connect Bar
                     GroupBox {
                         title: "Direct Connect";
@@ -437,6 +495,12 @@ export component MainWindow inherits Window {
                                             clicked => { root.forget-peer(peer.address); }
                                         }
 
+                                        // Topology layout button if connected
+                                        if peer.connected : Button {
+                                            text: "📐 Layout";
+                                            clicked => { root.active-tab = 1; }
+                                        }
+
                                         // Connect / Disconnect button
                                         Button {
                                             text: peer.connected ? "Disconnect" : "Connect";
@@ -467,7 +531,7 @@ export component MainWindow inherits Window {
                     spacing: 16px; vertical-stretch: 1;
 
                     Text {
-                        text: "Configure the physical arrangement of your screens. Moving your mouse past this screen's edge transfers control to the peer screen.";
+                        text: "Configure the physical arrangement of your screens. Moving your mouse past this screen's edge transfers control to the peer. Changes automatically synchronize bidirectionally with the connected peer over the network.";
                         color: #8e90a6; font-size: 13px; wrap: word-wrap;
                     }
 
@@ -484,7 +548,7 @@ export component MainWindow inherits Window {
                                     width: 140px; height: 50px; border-radius: 6px;
                                     background: root.setting-peer-pos == "above" ? #3b82f6 : #232536;
                                     Text {
-                                        text: root.setting-peer-pos == "above" ? "Peer (Above)" : "Top Edge";
+                                        text: root.setting-peer-pos == "above" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Above)") : "Top Edge";
                                         color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
                                     }
                                     TouchArea { clicked => { root.setting-peer-pos = "above"; root.save-topology("above"); } }
@@ -500,7 +564,7 @@ export component MainWindow inherits Window {
                                     width: 130px; height: 80px; border-radius: 6px;
                                     background: root.setting-peer-pos == "left" ? #3b82f6 : #232536;
                                     Text {
-                                        text: root.setting-peer-pos == "left" ? "Peer (Left)" : "Left Edge";
+                                        text: root.setting-peer-pos == "left" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Left)") : "Left Edge";
                                         color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
                                     }
                                     TouchArea { clicked => { root.setting-peer-pos = "left"; root.save-topology("left"); } }
@@ -523,7 +587,7 @@ export component MainWindow inherits Window {
                                     width: 130px; height: 80px; border-radius: 6px;
                                     background: root.setting-peer-pos == "right" ? #3b82f6 : #232536;
                                     Text {
-                                        text: root.setting-peer-pos == "right" ? "Peer (Right)" : "Right Edge";
+                                        text: root.setting-peer-pos == "right" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Right)") : "Right Edge";
                                         color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
                                     }
                                     TouchArea { clicked => { root.setting-peer-pos = "right"; root.save-topology("right"); } }
@@ -537,7 +601,7 @@ export component MainWindow inherits Window {
                                     width: 140px; height: 50px; border-radius: 6px;
                                     background: root.setting-peer-pos == "below" ? #3b82f6 : #232536;
                                     Text {
-                                        text: root.setting-peer-pos == "below" ? "Peer (Below)" : "Bottom Edge";
+                                        text: root.setting-peer-pos == "below" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Below)") : "Bottom Edge";
                                         color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
                                     }
                                     TouchArea { clicked => { root.setting-peer-pos = "below"; root.save-topology("below"); } }
