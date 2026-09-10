@@ -1,0 +1,8 @@
+# Manguesechee — grant input/uinput group access to raw input devices.
+# Applied automatically by the package post-install hook.
+
+# uinput — create virtual devices
+KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+
+# evdev — read physical input devices
+SUBSYSTEM=="input", GROUP="input", MODE="0660"

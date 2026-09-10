@@ -1,0 +1,24 @@
+[package]
+name    = "manguesechee-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Slint GUI — device list, pairing, topology editor"
+
+[[bin]]
+name = "manguesechee-ui"
+path = "src/main.rs"
+
+[dependencies]
+libc               = { workspace = true }
+manguesechee-core    = { workspace = true }
+slint              = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+dirs               = { workspace = true }
+
+[build-dependencies]
+slint-build = "1.17"
+tokio = { workspace = true }

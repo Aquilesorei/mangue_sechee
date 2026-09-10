@@ -1,0 +1,14 @@
+[Unit]
+Description=Manguesechee KVM Agent
+Documentation=https://github.com/manguesechee/manguesechee
+After=graphical-session.target network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/manguesechee-agent
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,16 @@
+[package]
+name    = "manguesechee-network"
+version = "0.1.0"
+edition = "2021"
+description = "Network transport, device discovery and connection management"
+
+[dependencies]
+manguesechee-core = { workspace = true }
+tokio             = { workspace = true }
+serde             = { workspace = true }
+bincode           = { workspace = true }
+thiserror         = { workspace = true }
+anyhow            = { workspace = true }
+tracing           = { workspace = true }
+async-trait       = "0.1"
+mdns-sd = { workspace = true }

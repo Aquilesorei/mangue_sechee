@@ -1,0 +1,30 @@
+# ── Rust ────────────────────────────────────────────────────────────────────
+/target/
+**/target/
+Cargo.lock          # remove this line if you want to track the lock file
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.fleet/
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# ── Secrets / local config ───────────────────────────────────────────────────
+# Never commit generated identity keys or known-peers state
+.config/manguesechee/identity.key
+.config/manguesechee/known_peers.json
+
+# ── Misc ────────────────────────────────────────────────────────────────────
+*.log
+*.bak
+/dist/x86_64/
+/dist/.stage_deb/

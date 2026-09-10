@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/manguesechee-core",
+    "crates/manguesechee-agent",
+    "crates/manguesechee-input",
+    "crates/manguesechee-network",
+    "crates/manguesechee-ui",
+    "crates/manguesechee-cli",
+]
+
+# ── Workspace-wide dependency versions ──────────────────────────────────────
+[workspace.dependencies]
+libc                = "0.2"
+# Async runtime
+tokio               = { version = "1",   features = ["full"] }
+
+# Serialization
+serde               = { version = "1",   features = ["derive"] }
+bincode             = { version = "2", features = ["serde"] }
+
+# Linux input
+evdev               = { version = "0.12", features = ["tokio"] }
+
+# Error handling
+thiserror           = "2"
+anyhow              = "1"
+
+# Identity
+uuid                = { version = "1", features = ["v4"] }
+
+# Config
+toml                = "0.8"
+dirs                = "5"
+
+# Discovery + pairing
+mdns-sd             = "0.11"
+rand                = "0.8"
+serde_json          = "1"
+
+# GUI
+slint               = "1.17"
+
+# Clipboard
+arboard             = "3"
+
+# Logging
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+# Internal crates (path deps shared across the workspace)
+manguesechee-core    = { path = "crates/manguesechee-core" }
+manguesechee-network = { path = "crates/manguesechee-network" }
+manguesechee-input   = { path = "crates/manguesechee-input" }
+
+# ── Workspace-wide profile settings ─────────────────────────────────────────
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level       = 3
+lto             = true
+codegen-units   = 1
+strip           = true

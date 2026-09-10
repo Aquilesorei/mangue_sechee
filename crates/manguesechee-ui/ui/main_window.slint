@@ -1,0 +1,176 @@
+import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit,
+         Switch, ComboBox, ProgressIndicator } from "std-widgets.slint";
+
+export struct PeerEntry {
+    name:      string,
+    address:   string,
+    paired:    bool,
+    connected: bool,
+}
+
+export enum AppView { Wizard, Connecting, Main }
+
+export component MainWindow inherits Window {
+    title: "Manguesechee";
+    icon:  @image-url("../../../assets/icons/manguesechee-256.png");
+    min-width:  640px;
+    min-height: 480px;
+    background: #1a1a2e;
+
+    in-out property <AppView>     view:         AppView.Wizard;
+    in-out property <int>         wizard-page:  0;
+    in-out property <string>      local-name:   "unknown";
+    in-out property <string>      status:       "Starting…";
+    in-out property <bool>        discovery:    true;
+    in-out property <[PeerEntry]> peers:        [];
+    in-out property <int>         role:         0;
+    in-out property <string>      peer-address: "";
+    in-out property <string>      peer-side:    "right";
+
+    callback wizard-finish(int, string, string);
+    callback connect-requested(string);
+    callback disconnect-requested();
+    callback toggle-discovery(bool);
+
+    // ── Wizard ────────────────────────────────────────────────────────────
+    if view == AppView.Wizard : VerticalBox {
+        padding: 40px; spacing: 24px;
+
+        Text {
+            text: "Welcome to Manguesechee"; font-size: 26px;
+            color: #e0e0ff; font-weight: 700; horizontal-alignment: center;
+        }
+        Text {
+            text: "Control multiple Linux machines with one keyboard and mouse.";
+            font-size: 14px; color: #888; wrap: word-wrap; horizontal-alignment: center;
+        }
+
+        if wizard-page == 0 : VerticalBox {
+            spacing: 16px;
+            Text { text: "What is this machine?"; color: #aaf; font-size: 16px; }
+            ComboBox {
+                model: ["Controller + Peer (both roles)",
+                        "Controller only (sends input)",
+                        "Peer only (receives input)"];
+                current-index: root.role;
+                selected => { root.role = self.current-index; }
+            }
+            HorizontalBox {
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: "Next →"; primary: true;
+                         clicked => { root.wizard-page = 1; } }
+            }
+        }
+
+        if wizard-page == 1 : VerticalBox {
+            spacing: 16px;
+            Text { text: "Peer machine"; color: #aaf; font-size: 16px; }
+            Text {
+                text: "IP address of the other machine. Leave blank for mDNS auto-discovery.";
+                color: #888; font-size: 13px; wrap: word-wrap;
+            }
+            LineEdit {
+                placeholder-text: "192.168.1.x:24800";
+                text <=> root.peer-address;
+            }
+            Text { text: "Which side is the peer screen on?"; color: #aaf; font-size: 14px; }
+            ComboBox {
+                model: ["Right", "Left", "Above", "Below"];
+                selected => { root.peer-side = self.current-value.to-lowercase(); }
+            }
+            HorizontalBox {
+                spacing: 8px;
+                Button { text: "← Back"; clicked => { root.wizard-page = 0; } }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Connect";
+                    primary: true;
+                    clicked => {
+                        root.view = AppView.Connecting;
+                        root.wizard-finish(root.role, root.peer-address, root.peer-side);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Connecting ────────────────────────────────────────────────────────
+    if view == AppView.Connecting : VerticalBox {
+        padding: 60px; spacing: 24px; alignment: center;
+        Text { text: "Starting Manguesechee…"; font-size: 20px;
+               color: #e0e0ff; horizontal-alignment: center; }
+        ProgressIndicator { indeterminate: true; }
+        Text { text: root.status; color: #888; font-size: 13px;
+               horizontal-alignment: center; }
+    }
+
+    // ── Main view ─────────────────────────────────────────────────────────
+    if view == AppView.Main : VerticalBox {
+        padding: 16px; spacing: 12px;
+
+        HorizontalBox {
+            spacing: 12px;
+            Text { text: "Manguesechee"; font-size: 22px; color: #e0e0ff; font-weight: 700; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: root.local-name; font-size: 13px; color: #888;
+                   vertical-alignment: center; }
+        }
+
+        Rectangle {
+            background: #16213e; border-radius: 6px; height: 40px;
+            HorizontalBox {
+                padding: 10px;
+                Text { text: root.status; color: #aaf; font-size: 13px;
+                       vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Switch {
+                    text: "Discovery"; checked: root.discovery;
+                    toggled => { root.toggle-discovery(self.checked); }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Peers"; vertical-stretch: 1;
+            VerticalBox {
+                spacing: 6px;
+                for peer[i] in root.peers : HorizontalBox {
+                    spacing: 10px; padding: 8px;
+                    Rectangle {
+                        width: 8px; height: 8px; border-radius: 4px;
+                        background: peer.connected ? #44ff88
+                                  : (peer.paired   ? #ffaa44 : #555);
+                        y: (parent.height - self.height) / 2;
+                    }
+                    VerticalBox {
+                        spacing: 2px; horizontal-stretch: 1;
+                        Text { text: peer.name;    color: #e0e0ff; font-size: 14px; }
+                        Text { text: peer.address; color: #777;   font-size: 11px; }
+                    }
+                    Button {
+                        text: peer.connected ? "Disconnect" : "Connect";
+                        primary: !peer.connected;
+                        clicked => {
+                            if (peer.connected) { root.disconnect-requested(); }
+                            else { root.connect-requested(peer.address); }
+                        }
+                    }
+                }
+                if root.peers.length == 0 : Text {
+                    text: "Scanning for peers on the LAN…";
+                    color: #555; font-size: 13px; horizontal-alignment: center;
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Manual connect";
+            HorizontalBox {
+                spacing: 8px;
+                manual := LineEdit { placeholder-text: "host:24800"; horizontal-stretch: 1; }
+                Button { text: "Connect";
+                         clicked => { root.connect-requested(manual.text); } }
+            }
+        }
+    }
+}

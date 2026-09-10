@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Manguesechee
+GenericName=Software KVM
+Comment=Control multiple Linux machines with one keyboard and mouse
+Exec=manguesechee-ui
+Icon=manguesechee
+Categories=Utility;System;
+Keywords=kvm;input;remote;keyboard;mouse;
+StartupNotify=true

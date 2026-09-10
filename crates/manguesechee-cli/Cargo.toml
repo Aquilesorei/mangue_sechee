@@ -1,0 +1,15 @@
+[package]
+name    = "manguesechee-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface (status, pair, devices, layout, config)"
+
+[[bin]]
+name = "manguesechee-cli"
+path = "src/main.rs"
+
+[dependencies]
+manguesechee-core = { workspace = true }
+anyhow            = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }

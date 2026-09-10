@@ -1,0 +1,13 @@
+[package]
+name    = "manguesechee-input"
+version = "0.1.0"
+edition = "2021"
+description = "Input capture and injection backends (Wayland, uinput, X11)"
+
+[dependencies]
+manguesechee-core = { workspace = true }
+thiserror         = { workspace = true }
+anyhow            = { workspace = true }
+tracing           = { workspace = true }
+tokio             = { workspace = true }
+evdev             = { workspace = true }
