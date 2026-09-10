@@ -2,11 +2,12 @@ import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit,
          Switch, ComboBox, ProgressIndicator, ScrollView } from "std-widgets.slint";
 
 export struct PeerEntry {
-    name:      string,
-    address:   string,
-    paired:    bool,
-    connected: bool,
-    position:  string,
+    name:        string,
+    address:     string,
+    paired:      bool,
+    connected:   bool,
+    position:    string,
+    ping-status: string,
 }
 
 export enum AppView { Wizard, Connecting, Main }
@@ -14,10 +15,10 @@ export enum AppView { Wizard, Connecting, Main }
 export component MainWindow inherits Window {
     title: "Manguesechee";
     icon:  @image-url("../../../assets/icons/manguesechee-256.png");
-    min-width:  840px;
-    min-height: 590px;
-    preferred-width: 880px;
-    preferred-height: 620px;
+    min-width:  860px;
+    min-height: 600px;
+    preferred-width: 900px;
+    preferred-height: 640px;
     background: #11121c;
 
     // ── Application State ───────────────────────────────────────────────────
@@ -30,6 +31,7 @@ export component MainWindow inherits Window {
     in-out property <bool>        is-service-running: true;
     in-out property <string>      role-label:         "Server + Client (Both)";
     in-out property <bool>        discovery:          true;
+    in-out property <bool>        cursor-locked:      false;
     in-out property <[PeerEntry]> peers:              [];
     in-out property <[string]>    log-lines:          [];
 
@@ -39,26 +41,39 @@ export component MainWindow inherits Window {
     in-out property <string>      wizard-side:  "right";
 
     // ── Settings Properties ─────────────────────────────────────────────────
-    in-out property <string>      setting-name:       "fedora";
-    in-out property <int>         setting-role:       0; // 0=Both, 1=Controller, 2=Peer
-    in-out property <string>      setting-port:       "24800";
-    in-out property <bool>        setting-discovery:  true;
-    in-out property <bool>        setting-clipboard:  true;
-    in-out property <string>      setting-width:      "1920";
-    in-out property <string>      setting-height:     "1080";
-    in-out property <string>      setting-peer-addr:  "";
-    in-out property <string>      setting-peer-pos:   "right";
-    in-out property <string>      settings-feedback:  "";
-    in-out property <string>      logs-feedback:      "";
+    in-out property <string>      setting-name:         "fedora";
+    in-out property <int>         setting-role:         0; // 0=Both, 1=Controller, 2=Peer
+    in-out property <string>      setting-port:         "24800";
+    in-out property <bool>        setting-discovery:    true;
+    in-out property <bool>        setting-clipboard:    true;
+    in-out property <bool>        setting-autostart:    true;
+    in-out property <string>      setting-width:        "1920";
+    in-out property <string>      setting-height:       "1080";
+    in-out property <string>      setting-switch-delay: "0";
+    in-out property <string>      setting-deadzone:     "50";
+    in-out property <string>      setting-peer-addr:    "";
+    in-out property <string>      setting-peer-pos:     "right";
+    in-out property <string>      settings-feedback:    "";
+    in-out property <string>      logs-feedback:        "";
+
+    // ── Logs Filter Properties ──────────────────────────────────────────────
+    in-out property <int>         log-level-filter:     0; // 0=All, 1=Errors, 2=Warnings, 3=Info
+    in-out property <string>      log-filter:           "";
 
     // ── Callbacks ───────────────────────────────────────────────────────────
     callback tab-selected(int);
     callback connect-requested(string);
     callback disconnect-requested();
     callback toggle-discovery(bool);
+    callback toggle-cursor-lock();
+    callback ping-peer(string);
+    callback forget-peer(string);
+    callback update-peer-position(string, string);
     callback save-settings();
     callback auto-detect-screen();
     callback save-topology(string);
+    callback filter-logs-level(int);
+    callback filter-logs-text(string);
     callback copy-logs();
     callback refresh-logs();
     callback clear-logs();
@@ -288,6 +303,14 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        // Cursor Lock Toggle Button
+                        Button {
+                            text: root.cursor-locked ? "🔒 Cursor Locked" : "🔓 Lock Cursor";
+                            primary: root.cursor-locked;
+                            enabled: root.is-service-running;
+                            clicked => { root.toggle-cursor-lock(); }
+                        }
+
                         // Live Service Controls (Start, Stop, Restart)
                         if root.is-service-running : HorizontalBox {
                             spacing: 6px;
@@ -369,9 +392,9 @@ export component MainWindow inherits Window {
                                 spacing: 8px; padding-right: 6px;
 
                                 for peer[i] in root.peers : Rectangle {
-                                    height: 56px; background: #181926; border-radius: 6px;
+                                    height: 64px; background: #181926; border-radius: 8px; border-width: 1px; border-color: #2b2d42;
                                     HorizontalBox {
-                                        padding: 10px; spacing: 12px;
+                                        padding-left: 12px; padding-right: 12px; spacing: 10px;
                                         Rectangle {
                                             width: 10px; height: 10px; border-radius: 5px;
                                             background: peer.connected ? #38ef7d : (peer.paired ? #f59e0b : #6b7280);
@@ -381,17 +404,40 @@ export component MainWindow inherits Window {
                                             spacing: 2px; horizontal-stretch: 1;
                                             HorizontalBox {
                                                 spacing: 8px;
-                                                Text { text: peer.name; font-size: 14px; font-weight: 600; color: #e0e0ff; }
-                                                Rectangle {
-                                                    background: #2b2d42; border-radius: 4px; height: 18px;
+                                                Text { text: peer.name; font-size: 14px; font-weight: 700; color: #e0e0ff; }
+                                                if peer.ping-status != "" : Rectangle {
+                                                    background: #1e293b; border-radius: 4px; height: 18px;
                                                     HorizontalBox {
                                                         padding-left: 6px; padding-right: 6px;
-                                                        Text { text: peer.position; font-size: 11px; color: #94a3b8; }
+                                                        Text { text: peer.ping-status; font-size: 10px; font-weight: 600; color: #38ef7d; }
                                                     }
                                                 }
                                             }
-                                            Text { text: peer.address; font-size: 12px; color: #72748a; }
+                                            Text { text: peer.address; font-size: 11px; color: #72748a; }
                                         }
+
+                                        // Side / Position selector directly on card
+                                        Text { text: "Side:"; font-size: 12px; color: #8e90a6; vertical-alignment: center; }
+                                        ComboBox {
+                                            width: 95px;
+                                            model: ["Right", "Left", "Above", "Below"];
+                                            current-index: peer.position == "left" ? 1 : (peer.position == "above" ? 2 : (peer.position == "below" ? 3 : 0));
+                                            selected => { root.update-peer-position(peer.address, self.current-value.to-lowercase()); }
+                                        }
+
+                                        // Ping button
+                                        Button {
+                                            text: "📶 Ping";
+                                            clicked => { root.ping-peer(peer.address); }
+                                        }
+
+                                        // Unpair button
+                                        Button {
+                                            text: "🗑️ Unpair";
+                                            clicked => { root.forget-peer(peer.address); }
+                                        }
+
+                                        // Connect / Disconnect button
                                         Button {
                                             text: peer.connected ? "Disconnect" : "Connect";
                                             primary: !peer.connected;
@@ -573,6 +619,35 @@ export component MainWindow inherits Window {
                                     Text { text: "Clipboard Sharing:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
                                     Switch { text: root.setting-clipboard ? "Enabled" : "Disabled"; checked <=> root.setting-clipboard; }
                                 }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Autostart on Login:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    Switch { text: root.setting-autostart ? "Enabled (systemd)" : "Disabled"; checked <=> root.setting-autostart; }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Edge Switching & Sensitivity Tuning";
+                            VerticalBox {
+                                spacing: 10px;
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Dwell Delay (ms):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-switch-delay; width: 80px; }
+                                    Text { text: "(0 = instant, 150 = recommended dwell time)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Corner Deadzone (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-deadzone; width: 80px; }
+                                    Text { text: "(Protects corners when clicking window controls or menus)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Lock Cursor:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    Switch { text: root.cursor-locked ? "Locked to screen" : "Unlocked"; checked <=> root.cursor-locked; }
+                                }
                             }
                         }
 
@@ -629,6 +704,34 @@ export component MainWindow inherits Window {
                 if root.active-tab == 3 : VerticalBox {
                     spacing: 10px; vertical-stretch: 1;
 
+                    // Filter toolbar
+                    HorizontalBox {
+                        spacing: 8px;
+                        Text { text: "Filter:"; color: #8e90a6; font-size: 12px; vertical-alignment: center; }
+                        log-search := LineEdit {
+                            placeholder-text: "Search logs (e.g. error, pop-os, mouse)...";
+                            text <=> root.log-filter;
+                            edited => { root.filter-logs-text(self.text); }
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: root.log-level-filter == 0 ? "● All" : "All";
+                            clicked => { root.log-level-filter = 0; root.filter-logs-level(0); }
+                        }
+                        Button {
+                            text: root.log-level-filter == 1 ? "● Errors" : "Errors";
+                            clicked => { root.log-level-filter = 1; root.filter-logs-level(1); }
+                        }
+                        Button {
+                            text: root.log-level-filter == 2 ? "● Warnings" : "Warnings";
+                            clicked => { root.log-level-filter = 2; root.filter-logs-level(2); }
+                        }
+                        Button {
+                            text: root.log-level-filter == 3 ? "● Info" : "Info";
+                            clicked => { root.log-level-filter = 3; root.filter-logs-level(3); }
+                        }
+                    }
+
                     HorizontalBox {
                         Text { text: "Live Agent Activity & Events"; color: #8e90a6; font-size: 13px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
@@ -661,7 +764,7 @@ export component MainWindow inherits Window {
                                     color: #cbd5e1;
                                 }
                                 if root.log-lines.length == 0 : Text {
-                                    text: "No logs recorded yet. Click Refresh to load from systemd.";
+                                    text: "No logs matching current filter. Click Refresh or clear search.";
                                     font-size: 12px; color: #64748b;
                                 }
                             }

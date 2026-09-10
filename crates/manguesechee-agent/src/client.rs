@@ -25,6 +25,9 @@ pub async fn connect_to(
     keyboard_path: Option<PathBuf>,
     screen_width:  u32,
     screen_height: u32,
+    deadzone_px:   u32,
+    delay_ms:      u32,
+    ipc_state:     crate::ipc_server::SharedState,
 ) -> anyhow::Result<()> {
     info!("connecting to {addr}  (screen {screen_width}×{screen_height})");
     let mut transport = connect(addr).await?;
@@ -137,10 +140,17 @@ pub async fn connect_to(
 
     // ── State machine ─────────────────────────────────────────────────────────
     let mut state = ControllerState::Local;
-    let mut edge  = EdgeDetector::new(screen_width, screen_height);
-    info!("ready — move cursor to the right edge to switch to peer");
+    let initial_locked = ipc_state.lock().unwrap().cursor_locked;
+    let mut edge  = EdgeDetector::new(screen_width, screen_height)
+        .with_settings(deadzone_px, delay_ms, initial_locked);
+    info!("ready — move cursor to screen edge to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms)");
 
     loop {
+        // Sync dynamic cursor lock from GUI / IPC
+        {
+            let is_locked = ipc_state.lock().unwrap().cursor_locked;
+            edge.set_locked(is_locked);
+        }
         tokio::select! {
             maybe_ev = ev_rx.recv() => {
                 let Some(event) = maybe_ev else { break };

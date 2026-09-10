@@ -37,6 +37,7 @@ pub async fn run(name: String, id: String, port: u16, state: SharedState) {
                                 address: peer.address.clone(),
                                 paired: is_paired,
                                 connected: false,
+                                position: "right".to_string(),
                             });
                         }
                     }

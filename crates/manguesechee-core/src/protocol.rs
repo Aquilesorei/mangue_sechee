@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::events::InputEvent;
 
 /// Screen edge that a cursor crosses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Edge { Left, Right, Top, Bottom }
 
 impl Edge {

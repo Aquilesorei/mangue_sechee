@@ -71,6 +71,8 @@ if [[ -f "$REPO_ROOT/assets/icons/manguesechee-256.png" ]]; then
 fi
 if [[ -f "$REPO_ROOT/assets/icons/manguesechee-48.png" ]]; then
     $SUDO_CMD install -Dm644 "$REPO_ROOT/assets/icons/manguesechee-48.png" /usr/share/icons/hicolor/48x48/apps/manguesechee.png
+fi
+
 # Update udev rules and ensure /dev/uinput permissions
 if [[ -f "$REPO_ROOT/dist/99-manguesechee.rules" ]]; then
     $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /etc/udev/rules.d/99-manguesechee.rules

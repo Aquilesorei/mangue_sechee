@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
                 address: addr.clone(),
                 paired: is_paired,
                 connected: false,
+                position: p.position.clone(),
             }
         })
     }).collect();
@@ -117,6 +118,8 @@ async fn main() -> anyhow::Result<()> {
         let kb     = opts.keyboard_path.clone();
         let w      = opts.screen_width;
         let h      = opts.screen_height;
+        let deadzone = cfg.input.corner_deadzone_px;
+        let delay    = cfg.input.switch_delay_ms;
         let state  = Arc::clone(&ipc_state);
 
         tokio::spawn(async move {
@@ -130,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
 
                 tokio::spawn(async move {
                     state.lock().unwrap().connected_to = Some(addr.clone());
-                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h).await {
+                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, Arc::clone(&state)).await {
                         tracing::error!("controller session to {addr} failed: {e:#}");
                     }
                     state.lock().unwrap().connected_to = None;

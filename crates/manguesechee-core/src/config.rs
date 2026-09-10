@@ -64,14 +64,24 @@ impl Default for NetworkConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputConfig {
-    pub enabled:       bool,
-    pub mouse_device:  Option<String>,
-    pub keyboard_device: Option<String>,
+    pub enabled:            bool,
+    pub mouse_device:       Option<String>,
+    pub keyboard_device:    Option<String>,
+    pub switch_delay_ms:    u32,
+    pub corner_deadzone_px: u32,
+    pub cursor_locked:      bool,
 }
 
 impl Default for InputConfig {
     fn default() -> Self {
-        Self { enabled: true, mouse_device: None, keyboard_device: None }
+        Self {
+            enabled:            true,
+            mouse_device:       None,
+            keyboard_device:    None,
+            switch_delay_ms:    0,
+            corner_deadzone_px: 50,
+            cursor_locked:      false,
+        }
     }
 }
 

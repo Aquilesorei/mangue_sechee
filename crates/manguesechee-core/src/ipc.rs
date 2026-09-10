@@ -21,6 +21,8 @@ pub enum GuiCommand {
     Connect   { address: String },
     Disconnect,
     SetDiscovery { enabled: bool },
+    SetCursorLock { locked: bool },
+    ForgetPeer { address: String },
     Shutdown,
 }
 
@@ -28,10 +30,11 @@ pub enum GuiCommand {
 #[serde(tag = "type")]
 pub enum AgentEvent {
     Status {
-        local_name:   String,
-        connected_to: Option<String>,
-        discovery:    bool,
-        peers:        Vec<PeerInfo>,
+        local_name:    String,
+        connected_to:  Option<String>,
+        discovery:     bool,
+        cursor_locked: bool,
+        peers:         Vec<PeerInfo>,
     },
     Ok,
     Error { message: String },
@@ -43,4 +46,5 @@ pub struct PeerInfo {
     pub address:   String,
     pub paired:    bool,
     pub connected: bool,
+    pub position:  String,
 }

@@ -1,6 +1,7 @@
 slint::include_modules!();
 
 use manguesechee_core::{config, ipc};
+use slint::Model;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tracing::{info, warn};
@@ -143,6 +144,25 @@ fn main() -> anyhow::Result<()> {
                 cfg.screen.height = height;
             }
 
+            // Sensitivity & Edge tuning
+            if let Ok(delay) = w.get_setting_switch_delay().trim().parse::<u32>() {
+                cfg.input.switch_delay_ms = delay;
+            }
+            if let Ok(deadzone) = w.get_setting_deadzone().trim().parse::<u32>() {
+                cfg.input.corner_deadzone_px = deadzone;
+            }
+            let cursor_lock = w.get_cursor_locked();
+            cfg.input.cursor_locked = cursor_lock;
+            send_ipc(ipc::GuiCommand::SetCursorLock { locked: cursor_lock });
+
+            // Autostart on boot (systemd user unit)
+            let autostart_enabled = w.get_setting_autostart();
+            if autostart_enabled {
+                let _ = Command::new("systemctl").args(["--user", "enable", "manguesechee-agent"]).status();
+            } else {
+                let _ = Command::new("systemctl").args(["--user", "disable", "manguesechee-agent"]).status();
+            }
+
             // Peer Config
             let peer_ip = w.get_setting_peer_addr().trim().to_string();
             let peer_pos = w.get_setting_peer_pos().trim().to_lowercase();
@@ -215,8 +235,12 @@ fn main() -> anyhow::Result<()> {
         let w = window.as_weak();
         window.on_copy_logs(move || {
             let Some(w) = w.upgrade() else { return };
-            let logs = fetch_journal_logs();
-            let all_text = logs.join("\n");
+            let lines: Vec<String> = w.get_log_lines().iter().map(|s| s.to_string()).collect();
+            let all_text = if !lines.is_empty() {
+                lines.join("\n")
+            } else {
+                fetch_journal_logs().join("\n")
+            };
             let success = copy_to_clipboard(&all_text);
             if success {
                 w.set_logs_feedback("✓ Copied to clipboard!".into());
@@ -237,7 +261,32 @@ fn main() -> anyhow::Result<()> {
         window.on_refresh_logs(move || {
             let Some(w) = w.upgrade() else { return };
             let logs = fetch_journal_logs();
-            let slint_logs: Vec<slint::SharedString> = logs.into_iter().map(Into::into).collect();
+            let lvl = w.get_log_level_filter();
+            let q = w.get_log_filter().to_string();
+            let filtered = apply_log_filters(&logs, lvl, &q);
+            let slint_logs: Vec<slint::SharedString> = filtered.into_iter().map(Into::into).collect();
+            w.set_log_lines(slint_logs.as_slice().into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_filter_logs_level(move |lvl| {
+            let Some(w) = w.upgrade() else { return };
+            let logs = fetch_journal_logs();
+            let q = w.get_log_filter().to_string();
+            let filtered = apply_log_filters(&logs, lvl, &q);
+            let slint_logs: Vec<slint::SharedString> = filtered.into_iter().map(Into::into).collect();
+            w.set_log_lines(slint_logs.as_slice().into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_filter_logs_text(move |q| {
+            let Some(w) = w.upgrade() else { return };
+            let logs = fetch_journal_logs();
+            let lvl = w.get_log_level_filter();
+            let filtered = apply_log_filters(&logs, lvl, &q.to_string());
+            let slint_logs: Vec<slint::SharedString> = filtered.into_iter().map(Into::into).collect();
             w.set_log_lines(slint_logs.as_slice().into());
         });
     }
@@ -246,6 +295,136 @@ fn main() -> anyhow::Result<()> {
         window.on_clear_logs(move || {
             let Some(w) = w.upgrade() else { return };
             w.set_log_lines((&[] as &[slint::SharedString]).into());
+        });
+    }
+
+    // ── Cursor Lock & Edge Switching IPC ──────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_toggle_cursor_lock(move || {
+            let Some(w) = w.upgrade() else { return };
+            let new_lock = !w.get_cursor_locked();
+            w.set_cursor_locked(new_lock);
+            send_ipc(ipc::GuiCommand::SetCursorLock { locked: new_lock });
+            if let Ok(mut cfg) = config::load() {
+                cfg.input.cursor_locked = new_lock;
+                let _ = config::save(&cfg);
+            }
+            w.set_settings_feedback(if new_lock {
+                "🔒 Cursor locked to local screen".into()
+            } else {
+                "🔓 Cursor unlocked — edge switching enabled".into()
+            });
+        });
+    }
+
+    // ── Peer Management (Ping, Unpair, Side/Position) ─────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_ping_peer(move |addr| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+
+            // Instant UI feedback: set status to Pinging…
+            let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+            for p in &mut peers {
+                if p.address == addr_str.as_str() || addr_str.contains(p.address.as_str()) {
+                    p.ping_status = "Pinging…".into();
+                }
+            }
+            w.set_peers(peers.as_slice().into());
+
+            let w_async = w.as_weak();
+            let target_addr = addr_str.clone();
+            std::thread::spawn(move || {
+                use std::net::ToSocketAddrs;
+                let host_port = if target_addr.contains(':') {
+                    target_addr.clone()
+                } else {
+                    format!("{target_addr}:24800")
+                };
+
+                let start = std::time::Instant::now();
+                let ping_res = match host_port.to_socket_addrs() {
+                    Ok(mut addrs) => {
+                        if let Some(sock_addr) = addrs.next() {
+                            match std::net::TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_millis(1500)) {
+                                Ok(_) => {
+                                    let ms = start.elapsed().as_millis();
+                                    format!("✓ {ms}ms")
+                                }
+                                Err(_) => "⚠ Timeout".to_string(),
+                            }
+                        } else {
+                            "⚠ Invalid".to_string()
+                        }
+                    }
+                    Err(_) => "⚠ Unresolved".to_string(),
+                };
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = w_async.upgrade() {
+                        let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+                        for p in &mut peers {
+                            if p.address == target_addr.as_str() || target_addr.contains(p.address.as_str()) {
+                                p.ping_status = ping_res.clone().into();
+                            }
+                        }
+                        w.set_peers(peers.as_slice().into());
+                    }
+                });
+            });
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_forget_peer(move |addr| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+            send_ipc(ipc::GuiCommand::ForgetPeer { address: addr_str.clone() });
+            if let Ok(mut cfg) = config::load() {
+                cfg.peers.retain(|p| p.address.as_deref() != Some(&addr_str) && !addr_str.contains(p.address.as_deref().unwrap_or("!@#$")));
+                let _ = config::save(&cfg);
+            }
+            let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+            peers.retain(|p| p.address != addr_str.as_str() && !addr_str.contains(p.address.as_str()));
+            w.set_peers(peers.as_slice().into());
+            w.set_settings_feedback(format!("✓ Unpaired peer {addr_str}").into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_update_peer_position(move |addr, pos| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+            let pos_str = pos.to_string().to_lowercase();
+            if let Ok(mut cfg) = config::load() {
+                let mut found = false;
+                for p in &mut cfg.peers {
+                    if p.address.as_deref() == Some(&addr_str) || (p.address.is_some() && addr_str.contains(p.address.as_ref().unwrap())) {
+                        p.position = pos_str.clone();
+                        found = true;
+                    }
+                }
+                if !found {
+                    cfg.peers.push(config::PeerConfig {
+                        id: format!("peer-{}", addr_str.replace(':', "_")),
+                        address: Some(addr_str.clone()),
+                        position: pos_str.clone(),
+                    });
+                }
+                let _ = config::save(&cfg);
+                restart_agent_service();
+            }
+            let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+            for p in &mut peers {
+                if p.address == addr_str.as_str() || addr_str.contains(p.address.as_str()) {
+                    p.position = pos_str.clone().into();
+                }
+            }
+            w.set_peers(peers.as_slice().into());
+            w.set_setting_peer_pos(pos_str.clone().into());
+            w.set_settings_feedback(format!("✓ Position updated: peer placed on the {pos_str}").into());
         });
     }
 
@@ -293,31 +472,43 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, peers,
+                    local_name, connected_to, discovery, peers, cursor_locked,
                 }) = poll_status()
                 {
                     w.set_local_name(local_name.into());
                     w.set_discovery(discovery);
+                    w.set_cursor_locked(cursor_locked);
                     w.set_status(match &connected_to {
                         Some(p) => format!("Forwarding → {p}").into(),
                         None    => "Ready".into(),
                     });
 
+                    let current_peers: Vec<PeerEntry> = w.get_peers().iter().collect();
                     let default_pos = w.get_setting_peer_pos().to_string();
-                    let entries: Vec<PeerEntry> = peers.iter().map(|p| PeerEntry {
-                        name:      p.name.clone().into(),
-                        address:   p.address.clone().into(),
-                        paired:    p.paired,
-                        connected: p.connected,
-                        position:  default_pos.clone().into(),
+                    let entries: Vec<PeerEntry> = peers.iter().map(|p| {
+                        let existing_ping = current_peers.iter()
+                            .find(|cp| cp.address == p.address.as_str())
+                            .map(|cp| cp.ping_status.clone())
+                            .unwrap_or_default();
+                        PeerEntry {
+                            name:        p.name.clone().into(),
+                            address:     p.address.clone().into(),
+                            paired:      p.paired,
+                            connected:   p.connected,
+                            position:    if !p.position.is_empty() { p.position.clone().into() } else { default_pos.clone().into() },
+                            ping_status: existing_ping,
+                        }
                     }).collect();
                     w.set_peers(entries.as_slice().into());
                 }
 
-                // If currently on the logs tab, auto-refresh logs
+                // If currently on the logs tab, auto-refresh logs with active filters
                 if w.get_active_tab() == 3 {
                     let logs = fetch_journal_logs();
-                    let slint_logs: Vec<slint::SharedString> = logs.into_iter().map(Into::into).collect();
+                    let lvl = w.get_log_level_filter();
+                    let q = w.get_log_filter().to_string();
+                    let filtered = apply_log_filters(&logs, lvl, &q);
+                    let slint_logs: Vec<slint::SharedString> = filtered.into_iter().map(Into::into).collect();
                     w.set_log_lines(slint_logs.as_slice().into());
                 }
             },
@@ -338,8 +529,12 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_setting_port(cfg.network.port.to_string().into());
     w.set_setting_discovery(cfg.network.discovery);
     w.set_setting_clipboard(cfg.clipboard.enabled);
+    w.set_setting_autostart(is_autostart_enabled());
     w.set_setting_width(cfg.screen.width.to_string().into());
     w.set_setting_height(cfg.screen.height.to_string().into());
+    w.set_setting_switch_delay(cfg.input.switch_delay_ms.to_string().into());
+    w.set_setting_deadzone(cfg.input.corner_deadzone_px.to_string().into());
+    w.set_cursor_locked(cfg.input.cursor_locked);
 
     // Role: 0=Both, 1=Controller, 2=Peer
     let role = if !cfg.input.enabled {
@@ -357,6 +552,41 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     } else {
         w.set_setting_peer_pos("right".into());
     }
+}
+
+fn is_autostart_enabled() -> bool {
+    let out = Command::new("systemctl")
+        .args(["--user", "is-enabled", "manguesechee-agent"])
+        .output();
+    if let Ok(o) = out {
+        String::from_utf8_lossy(&o.stdout).trim() == "enabled"
+    } else {
+        false
+    }
+}
+
+fn apply_log_filters(raw_logs: &[String], level: i32, query: &str) -> Vec<String> {
+    let q_lower = query.trim().to_lowercase();
+    raw_logs
+        .iter()
+        .filter(|line| {
+            let l_upper = line.to_uppercase();
+            let matches_level = match level {
+                1 => l_upper.contains("ERROR") || l_upper.contains("ERR") || l_upper.contains("FAILED") || l_upper.contains("PANICKED"),
+                2 => l_upper.contains("WARN"),
+                3 => l_upper.contains("INFO"),
+                _ => true,
+            };
+            if !matches_level {
+                return false;
+            }
+            if q_lower.is_empty() {
+                return true;
+            }
+            line.to_lowercase().contains(&q_lower)
+        })
+        .cloned()
+        .collect()
 }
 
 fn detect_local_ip() -> String {

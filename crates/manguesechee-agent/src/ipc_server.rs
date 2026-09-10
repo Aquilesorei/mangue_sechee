@@ -9,10 +9,11 @@ use tracing::{info, warn};
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentState {
-    pub local_name:   String,
-    pub connected_to: Option<String>,
-    pub discovery:    bool,
-    pub peers:        Vec<PeerInfo>,
+    pub local_name:    String,
+    pub connected_to:  Option<String>,
+    pub discovery:     bool,
+    pub cursor_locked: bool,
+    pub peers:         Vec<PeerInfo>,
 }
 
 pub type SharedState = Arc<Mutex<AgentState>>;
@@ -84,10 +85,11 @@ fn handle_command(
         GuiCommand::GetStatus => {
             let s = state.lock().unwrap();
             AgentEvent::Status {
-                local_name:   s.local_name.clone(),
-                connected_to: s.connected_to.clone(),
-                discovery:    s.discovery,
-                peers:        s.peers.clone(),
+                local_name:    s.local_name.clone(),
+                connected_to:  s.connected_to.clone(),
+                discovery:     s.discovery,
+                cursor_locked: s.cursor_locked,
+                peers:         s.peers.clone(),
             }
         }
         GuiCommand::Connect { address } => {
@@ -101,6 +103,30 @@ fn handle_command(
         }
         GuiCommand::SetDiscovery { enabled } => {
             state.lock().unwrap().discovery = enabled;
+            AgentEvent::Ok
+        }
+        GuiCommand::SetCursorLock { locked } => {
+            info!("IPC: set cursor lock = {locked}");
+            let mut s = state.lock().unwrap();
+            s.cursor_locked = locked;
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                cfg.input.cursor_locked = locked;
+                let _ = manguesechee_core::config::save(&cfg);
+            }
+            AgentEvent::Ok
+        }
+        GuiCommand::ForgetPeer { address } => {
+            info!("IPC: forget peer at {address}");
+            let mut s = state.lock().unwrap();
+            s.peers.retain(|p| p.address != address);
+            if let Ok(mut known) = crate::session::load_known_peers() {
+                known.peers.retain(|p| p.name != address && p.id != address);
+                let _ = crate::session::save_known_peers(&known);
+            }
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                cfg.peers.retain(|p| p.address.as_deref() != Some(&address));
+                let _ = manguesechee_core::config::save(&cfg);
+            }
             AgentEvent::Ok
         }
         GuiCommand::Shutdown => {
