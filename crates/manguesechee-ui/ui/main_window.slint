@@ -49,6 +49,7 @@ export component MainWindow inherits Window {
     in-out property <string>      setting-peer-addr:  "";
     in-out property <string>      setting-peer-pos:   "right";
     in-out property <string>      settings-feedback:  "";
+    in-out property <string>      logs-feedback:      "";
 
     // ── Callbacks ───────────────────────────────────────────────────────────
     callback tab-selected(int);
@@ -58,6 +59,7 @@ export component MainWindow inherits Window {
     callback save-settings();
     callback auto-detect-screen();
     callback save-topology(string);
+    callback copy-logs();
     callback refresh-logs();
     callback clear-logs();
     callback start-service();
@@ -341,13 +343,17 @@ export component MainWindow inherits Window {
                     // Direct Connect Bar
                     GroupBox {
                         title: "Direct Connect";
+                        vertical-stretch: 0;
                         HorizontalBox {
                             spacing: 8px;
+                            alignment: center;
                             manual-ip := LineEdit {
+                                height: 38px;
                                 placeholder-text: "Enter peer IP:port (e.g. 192.168.1.50:24800)";
                                 horizontal-stretch: 1;
                             }
                             Button {
+                                height: 38px;
                                 text: "Connect"; primary: true;
                                 enabled: root.is-service-running;
                                 clicked => { root.connect-requested(manual-ip.text); }
@@ -358,49 +364,51 @@ export component MainWindow inherits Window {
                     // Discovered & Configured Peers List
                     GroupBox {
                         title: "Discovered & Configured Peers"; vertical-stretch: 1;
-                        VerticalBox {
-                            spacing: 8px;
+                        ScrollView {
+                            VerticalBox {
+                                spacing: 8px; padding-right: 6px;
 
-                            for peer[i] in root.peers : Rectangle {
-                                height: 56px; background: #181926; border-radius: 6px;
-                                HorizontalBox {
-                                    padding: 10px; spacing: 12px;
-                                    Rectangle {
-                                        width: 10px; height: 10px; border-radius: 5px;
-                                        background: peer.connected ? #38ef7d : (peer.paired ? #f59e0b : #6b7280);
-                                        y: (parent.height - self.height) / 2;
-                                    }
-                                    VerticalBox {
-                                        spacing: 2px; horizontal-stretch: 1;
-                                        HorizontalBox {
-                                            spacing: 8px;
-                                            Text { text: peer.name; font-size: 14px; font-weight: 600; color: #e0e0ff; }
-                                            Rectangle {
-                                                background: #2b2d42; border-radius: 4px; height: 18px;
-                                                HorizontalBox {
-                                                    padding-left: 6px; padding-right: 6px;
-                                                    Text { text: peer.position; font-size: 11px; color: #94a3b8; }
+                                for peer[i] in root.peers : Rectangle {
+                                    height: 56px; background: #181926; border-radius: 6px;
+                                    HorizontalBox {
+                                        padding: 10px; spacing: 12px;
+                                        Rectangle {
+                                            width: 10px; height: 10px; border-radius: 5px;
+                                            background: peer.connected ? #38ef7d : (peer.paired ? #f59e0b : #6b7280);
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                        VerticalBox {
+                                            spacing: 2px; horizontal-stretch: 1;
+                                            HorizontalBox {
+                                                spacing: 8px;
+                                                Text { text: peer.name; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                                                Rectangle {
+                                                    background: #2b2d42; border-radius: 4px; height: 18px;
+                                                    HorizontalBox {
+                                                        padding-left: 6px; padding-right: 6px;
+                                                        Text { text: peer.position; font-size: 11px; color: #94a3b8; }
+                                                    }
                                                 }
                                             }
+                                            Text { text: peer.address; font-size: 12px; color: #72748a; }
                                         }
-                                        Text { text: peer.address; font-size: 12px; color: #72748a; }
-                                    }
-                                    Button {
-                                        text: peer.connected ? "Disconnect" : "Connect";
-                                        primary: !peer.connected;
-                                        enabled: root.is-service-running;
-                                        clicked => {
-                                            if peer.connected { root.disconnect-requested(); }
-                                            else { root.connect-requested(peer.address); }
+                                        Button {
+                                            text: peer.connected ? "Disconnect" : "Connect";
+                                            primary: !peer.connected;
+                                            enabled: root.is-service-running;
+                                            clicked => {
+                                                if peer.connected { root.disconnect-requested(); }
+                                                else { root.connect-requested(peer.address); }
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            if root.peers.length == 0 : VerticalBox {
-                                alignment: center; padding: 20px; spacing: 8px;
-                                Text { text: "No peers currently detected on the local network."; color: #8e90a6; horizontal-alignment: center; }
-                                Text { text: "Ensure the other machine has Manguesechee installed and is connected to the same Wi-Fi/LAN."; font-size: 12px; color: #5a5c72; horizontal-alignment: center; }
+                                if root.peers.length == 0 : VerticalBox {
+                                    alignment: center; padding: 24px; spacing: 8px;
+                                    Text { text: "No peers currently detected on the local network."; color: #8e90a6; horizontal-alignment: center; }
+                                    Text { text: "Ensure the other machine has Manguesechee installed and is connected to the same Wi-Fi/LAN."; font-size: 12px; color: #5a5c72; horizontal-alignment: center; }
+                                }
                             }
                         }
                     }
@@ -624,6 +632,18 @@ export component MainWindow inherits Window {
                     HorizontalBox {
                         Text { text: "Live Agent Activity & Events"; color: #8e90a6; font-size: 13px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
+                        if root.logs-feedback != "" : Text {
+                            text: root.logs-feedback;
+                            color: #4ade80;
+                            font-size: 13px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            text: "📋 Copy Logs";
+                            primary: true;
+                            clicked => { root.copy-logs(); }
+                        }
                         Button { text: "🔄 Refresh"; clicked => { root.refresh-logs(); } }
                         Button { text: "Clear"; clicked => { root.clear-logs(); } }
                     }

@@ -55,8 +55,11 @@ async fn handle(
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     let mut known = load_known_peers().unwrap_or_default();
+    let mut initial_msg: Option<Message> = None;
+
     if !known.contains(&peer_id) {
-        match transport.receive().await? {
+        let first_msg = transport.receive().await?;
+        match first_msg {
             Message::PairRequest { name, id, code } => {
                 let accepted = tokio::task::spawn_blocking({
                     let name = name.clone(); let code = code.clone();
@@ -68,14 +71,21 @@ async fn handle(
                         name: local_name.clone(), id: local_id.clone(), code,
                     }).await?;
                     known.add(id, name.clone());
-                    save_known_peers(&known)?;
+                    let _ = save_known_peers(&known);
                     info!("paired with '{name}'");
                 } else {
                     transport.send(&Message::PairRejected { reason: "user rejected".into() }).await?;
                     anyhow::bail!("pairing rejected");
                 }
             }
-            other => anyhow::bail!("expected PairRequest, got {other:?}"),
+            // Peer already considers us paired (e.g. client reconnected or configured on peer side)
+            active_msg @ (Message::InputEvent(_) | Message::EdgeCrossed { .. } | Message::Ping | Message::ClipboardSync { .. }) => {
+                info!("peer '{_peer_name}' ({peer_id}) already paired from remote; auto-trusting peer");
+                known.add(peer_id.clone(), _peer_name.clone());
+                let _ = save_known_peers(&known);
+                initial_msg = Some(active_msg);
+            }
+            other => anyhow::bail!("expected PairRequest or session message, got {other:?}"),
         }
     } else {
         info!("peer already known — skipping pairing");
@@ -83,8 +93,20 @@ async fn handle(
 
     // ── Split + virtual devices ───────────────────────────────────────────────
     let (mut sender, mut receiver) = transport.into_split();
-    let mut mouse    = MouseInjector::new()?;
-    let mut keyboard = KeyboardInjector::new()?;
+    let mut mouse = match MouseInjector::new() {
+        Ok(m) => m,
+        Err(e) => {
+            error!("failed to create virtual mouse: {e:#}");
+            anyhow::bail!("Virtual mouse creation failed: {e}. Check /dev/uinput permissions.");
+        }
+    };
+    let mut keyboard = match KeyboardInjector::new() {
+        Ok(k) => k,
+        Err(e) => {
+            error!("failed to create virtual keyboard: {e:#}");
+            anyhow::bail!("Virtual keyboard creation failed: {e}. Check /dev/uinput permissions.");
+        }
+    };
     info!("virtual mouse + keyboard ready");
 
     let mut edge = EdgeDetector::new(screen_width, screen_height);
@@ -97,9 +119,13 @@ async fn handle(
         }
     });
 
-    // ── Event loop ────────────────────────────────────────────────────────────
-    loop {
-        match receiver.receive().await? {
+    // Closure to process any message
+    let handle_msg = |msg: Message,
+                      edge: &mut EdgeDetector,
+                      mouse: &mut MouseInjector,
+                      keyboard: &mut KeyboardInjector,
+                      out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
+        match msg {
             Message::EdgeCrossed { edge: entry } => {
                 edge.place_at_entry(&entry.opposite());
                 info!("cursor entered from {entry:?}");
@@ -109,7 +135,7 @@ async fn handle(
                 if let InputEvent::MouseMove { dx, dy } = &event {
                     if let Some(exit) = edge.update(*dx, *dy) {
                         info!("cursor left via {exit:?} — ReturnControl");
-                        let _ = out_tx.send(Message::ReturnControl { edge: exit }).await;
+                        let _ = out_tx.try_send(Message::ReturnControl { edge: exit });
                     }
                 }
                 match &event {
@@ -128,9 +154,32 @@ async fn handle(
                 }
             }
 
-            Message::Ping    => { let _ = out_tx.send(Message::Pong).await; }
-            Message::Goodbye => { info!("peer disconnected"); break; }
+            Message::PairRequest { name, id, code } => {
+                info!("received PairRequest during session from {name} ({id}) — re-accepting");
+                let _ = out_tx.try_send(Message::PairAccepted {
+                    name: local_name.clone(), id: local_id.clone(), code,
+                });
+            }
+
+            Message::Ping    => { let _ = out_tx.try_send(Message::Pong); }
+            Message::Goodbye => { info!("peer disconnected"); return Ok(false); }
             other            => warn!("unexpected: {other:?}"),
+        }
+        Ok(true)
+    };
+
+    // Process initial message if captured during pairing resolution
+    if let Some(msg) = initial_msg {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &out_tx)? {
+            return Ok(());
+        }
+    }
+
+    // ── Event loop ────────────────────────────────────────────────────────────
+    loop {
+        let msg = receiver.receive().await?;
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &out_tx)? {
+            break;
         }
     }
     Ok(())

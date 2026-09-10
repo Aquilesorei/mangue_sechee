@@ -1,8 +1,7 @@
-# Manguesechee — grant input/uinput group access to raw input devices.
-# Applied automatically by the package post-install hook.
+# Manguesechee — grant input and uinput access to active desktop sessions
+# uinput — create virtual devices (accessible to active seat and users)
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput", MODE="0666"
 
-# uinput — create virtual devices
-KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+# evdev — capture physical input devices for active seat
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess", MODE="0660", GROUP="input"
 
-# evdev — read physical input devices
-SUBSYSTEM=="input", GROUP="input", MODE="0660"

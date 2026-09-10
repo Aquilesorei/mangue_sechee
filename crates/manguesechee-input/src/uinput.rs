@@ -34,8 +34,10 @@ impl MouseInjector {
             axes.insert(a);
         }
 
-        let device = VirtualDeviceBuilder::new()
-            .context("VirtualDeviceBuilder")?
+        let builder = VirtualDeviceBuilder::new()
+            .map_err(|e| anyhow::anyhow!("VirtualDeviceBuilder: {e} (permission denied on /dev/uinput. Ensure permissions are set via sudo ./dist/update.sh or sudo chmod 0666 /dev/uinput)"))?;
+
+        let device = builder
             .name("Manguesechee Virtual Mouse")
             .with_keys(&keys).context("set mouse keys")?
             .with_relative_axes(&axes).context("set rel axes")?
@@ -95,8 +97,10 @@ impl KeyboardInjector {
             keys.insert(Key::new(code));
         }
 
-        let device = VirtualDeviceBuilder::new()
-            .context("VirtualDeviceBuilder keyboard")?
+        let builder = VirtualDeviceBuilder::new()
+            .map_err(|e| anyhow::anyhow!("VirtualDeviceBuilder: {e} (permission denied on /dev/uinput. Ensure permissions are set via sudo ./dist/update.sh or sudo chmod 0666 /dev/uinput)"))?;
+
+        let device = builder
             .name("Manguesechee Virtual Keyboard")
             .with_keys(&keys).context("set keyboard keys")?
             .build().context("build keyboard device")?;

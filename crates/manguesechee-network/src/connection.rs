@@ -13,9 +13,14 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
 }
 
 pub async fn connect(addr: &str) -> anyhow::Result<TcpTransport> {
-    let stream = TcpStream::connect(addr)
+    let target = if !addr.contains(':') {
+        format!("{addr}:24800")
+    } else {
+        addr.to_string()
+    };
+    let stream = TcpStream::connect(&target)
         .await
-        .with_context(|| format!("failed to connect to {addr}"))?;
+        .with_context(|| format!("failed to connect to {target}"))?;
     Ok(TcpTransport::new(stream))
 }
 

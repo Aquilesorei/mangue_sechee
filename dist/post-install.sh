@@ -50,21 +50,26 @@ fi
 
 # ── 3. Udev and Kernel Modules ───────────────────────────────────────────────
 
-if [[ -f /etc/udev/rules.d/99-manguesechee.rules && -f /etc/modules-load.d/uinput.conf ]]; then
-    echo "    ✓ Udev rules and uinput kernel module already in place"
-else
-    echo "==> Configuring udev and persistent uinput module…"
-    if [[ -f /usr/lib/udev/rules.d/99-manguesechee.rules ]]; then
-        cp -f /usr/lib/udev/rules.d/99-manguesechee.rules /etc/udev/rules.d/99-manguesechee.rules 2>/dev/null || true
-    fi
-    udevadm control --reload-rules 2>/dev/null || true
-    udevadm trigger 2>/dev/null || true
-
-    modprobe uinput 2>/dev/null || true
-    mkdir -p /etc/modules-load.d
-    echo "uinput" > /etc/modules-load.d/uinput.conf
-    echo "    ✓ udev rules reloaded and uinput persistent"
+echo "==> Configuring udev and persistent uinput module…"
+if [[ -f /usr/lib/udev/rules.d/99-manguesechee.rules ]]; then
+    cp -f /usr/lib/udev/rules.d/99-manguesechee.rules /etc/udev/rules.d/99-manguesechee.rules 2>/dev/null || true
 fi
+udevadm control --reload-rules 2>/dev/null || true
+udevadm trigger 2>/dev/null || true
+
+modprobe uinput 2>/dev/null || true
+mkdir -p /etc/modules-load.d
+echo "uinput" > /etc/modules-load.d/uinput.conf
+
+# Grant immediate read/write permissions
+chmod 0666 /dev/uinput 2>/dev/null || true
+if [[ -n "$TARGET_USER" ]]; then
+    setfacl -m u:"$TARGET_USER":rw /dev/uinput 2>/dev/null || true
+    for dev in /dev/input/event*; do
+        setfacl -m u:"$TARGET_USER":rw "$dev" 2>/dev/null || true
+    done
+fi
+echo "    ✓ udev rules applied, permissions granted, and uinput persistent"
 
 # ── 4. Firewall (Ports 24800/tcp and 5353/udp) ───────────────────────────────
 

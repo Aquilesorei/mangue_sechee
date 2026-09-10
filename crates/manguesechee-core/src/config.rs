@@ -36,11 +36,15 @@ impl Default for Config {
 #[serde(default)]
 pub struct DeviceConfig {
     pub name: String,
+    pub id:   String,
 }
 
 impl Default for DeviceConfig {
     fn default() -> Self {
-        Self { name: hostname() }
+        Self {
+            name: hostname(),
+            id:   uuid::Uuid::new_v4().to_string(),
+        }
     }
 }
 
@@ -119,8 +123,13 @@ pub fn load() -> anyhow::Result<Config> {
     }
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("read {}", path.display()))?;
-    toml::from_str(&text)
-        .with_context(|| format!("parse {}", path.display()))
+    let mut cfg: Config = toml::from_str(&text)
+        .with_context(|| format!("parse {}", path.display()))?;
+    if cfg.device.id.trim().is_empty() {
+        cfg.device.id = uuid::Uuid::new_v4().to_string();
+        let _ = save(&cfg);
+    }
+    Ok(cfg)
 }
 
 pub fn save(config: &Config) -> anyhow::Result<()> {

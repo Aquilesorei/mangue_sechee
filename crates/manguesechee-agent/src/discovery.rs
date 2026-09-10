@@ -24,14 +24,18 @@ pub async fn run(name: String, id: String, port: u16, state: SharedState) {
                             "discovered peer: name={} id={} addr={}",
                             peer.name, peer.id, peer.address
                         );
+                        let known_store = crate::session::load_known_peers().unwrap_or_default();
+                        let is_paired = known_store.contains(&peer.id) || known_store.peers.iter().any(|p| p.name == peer.name);
+
                         if let Some(existing) = s.peers.iter_mut().find(|p| p.address == peer.address || p.name == peer.name) {
                             existing.address = peer.address.clone();
                             existing.name = peer.name.clone();
+                            existing.paired = is_paired;
                         } else {
                             s.peers.push(PeerInfo {
                                 name: peer.name.clone(),
                                 address: peer.address.clone(),
-                                paired: false,
+                                paired: is_paired,
                                 connected: false,
                             });
                         }

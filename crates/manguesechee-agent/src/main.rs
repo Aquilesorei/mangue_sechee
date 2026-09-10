@@ -39,7 +39,15 @@ async fn main() -> anyhow::Result<()> {
     let opts = parse_args(&args, &cfg);
 
     let local_name = cfg.device.name.clone();
-    let local_id   = Uuid::new_v4().to_string();
+    let local_id = if cfg.device.id.trim().is_empty() {
+        let new_id = Uuid::new_v4().to_string();
+        let mut updated = cfg.clone();
+        updated.device.id = new_id.clone();
+        let _ = config::save(&updated);
+        new_id
+    } else {
+        cfg.device.id.clone()
+    };
 
     info!(
         name   = %local_name,
@@ -51,10 +59,25 @@ async fn main() -> anyhow::Result<()> {
 
     // ── IPC — PID file + Unix socket ─────────────────────────────────────────────
     let _pid_guard = ipc_server::PidGuard::write().context("write PID file")?;
+
+    let known_store = session::load_known_peers().unwrap_or_default();
+    let initial_peers: Vec<manguesechee_core::ipc::PeerInfo> = cfg.peers.iter().filter_map(|p| {
+        p.address.as_ref().map(|addr| {
+            let is_paired = known_store.contains(&p.id) || known_store.peers.iter().any(|kp| kp.name == p.id);
+            manguesechee_core::ipc::PeerInfo {
+                name: p.id.clone(),
+                address: addr.clone(),
+                paired: is_paired,
+                connected: false,
+            }
+        })
+    }).collect();
+
     let ipc_state: ipc_server::SharedState = Arc::new(std::sync::Mutex::new(
         ipc_server::AgentState {
             local_name: local_name.clone(),
             discovery:  cfg.network.discovery,
+            peers:      initial_peers,
             ..Default::default()
         }
     ));

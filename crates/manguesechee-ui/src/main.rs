@@ -213,6 +213,27 @@ fn main() -> anyhow::Result<()> {
     // ── Logs Console ─────────────────────────────────────────────────────────
     {
         let w = window.as_weak();
+        window.on_copy_logs(move || {
+            let Some(w) = w.upgrade() else { return };
+            let logs = fetch_journal_logs();
+            let all_text = logs.join("\n");
+            let success = copy_to_clipboard(&all_text);
+            if success {
+                w.set_logs_feedback("✓ Copied to clipboard!".into());
+            } else {
+                w.set_logs_feedback("⚠ Copy failed".into());
+            }
+
+            let w_feedback = w.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
+                if let Some(w) = w_feedback.upgrade() {
+                    w.set_logs_feedback("".into());
+                }
+            });
+        });
+    }
+    {
+        let w = window.as_weak();
         window.on_refresh_logs(move || {
             let Some(w) = w.upgrade() else { return };
             let logs = fetch_journal_logs();
@@ -373,19 +394,74 @@ fn is_service_active() -> bool {
 
 fn fetch_journal_logs() -> Vec<String> {
     let output = Command::new("journalctl")
-        .args(["--user", "-u", "manguesechee-agent", "-n", "50", "--no-pager", "-o", "short-iso"])
+        .args(["--user", "-u", "manguesechee-agent", "-n", "100", "--no-pager", "-o", "short-iso"])
         .output();
 
     match output {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
-            text.lines()
+            let lines: Vec<String> = text.lines()
                 .filter(|l| !l.trim().is_empty())
                 .map(|l| l.to_string())
-                .collect()
+                .collect();
+            if lines.is_empty() {
+                vec!["[Notice] No journalctl entries available for manguesechee-agent.".into()]
+            } else {
+                lines
+            }
         }
         _ => vec!["[Notice] No journalctl entries available for manguesechee-agent.".into()],
     }
+}
+
+fn copy_to_clipboard(text: &str) -> bool {
+    // 1. Native / cross-platform via arboard
+    if let Ok(mut board) = arboard::Clipboard::new() {
+        if board.set_text(text).is_ok() {
+            return true;
+        }
+    }
+
+    // 2. Wayland native fallback via wl-copy
+    if let Ok(mut child) = Command::new("wl-copy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(text.as_bytes());
+            drop(stdin);
+            if let Ok(status) = child.wait() {
+                if status.success() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 3. X11 / Xwayland fallback via xclip
+    if let Ok(mut child) = Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(text.as_bytes());
+            drop(stdin);
+            if let Ok(status) = child.wait() {
+                if status.success() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 fn restart_agent_service() {

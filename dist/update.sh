@@ -71,6 +71,21 @@ if [[ -f "$REPO_ROOT/assets/icons/manguesechee-256.png" ]]; then
 fi
 if [[ -f "$REPO_ROOT/assets/icons/manguesechee-48.png" ]]; then
     $SUDO_CMD install -Dm644 "$REPO_ROOT/assets/icons/manguesechee-48.png" /usr/share/icons/hicolor/48x48/apps/manguesechee.png
+# Update udev rules and ensure /dev/uinput permissions
+if [[ -f "$REPO_ROOT/dist/99-manguesechee.rules" ]]; then
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /etc/udev/rules.d/99-manguesechee.rules
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /usr/lib/udev/rules.d/99-manguesechee.rules 2>/dev/null || true
+    $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
+    $SUDO_CMD udevadm trigger 2>/dev/null || true
+fi
+
+# Ensure /dev/uinput is immediately writable without requiring logout/reboot
+$SUDO_CMD chmod 0666 /dev/uinput 2>/dev/null || true
+if [[ -n "$TARGET_USER" ]]; then
+    $SUDO_CMD setfacl -m u:"$TARGET_USER":rw /dev/uinput 2>/dev/null || true
+    for dev in /dev/input/event*; do
+        $SUDO_CMD setfacl -m u:"$TARGET_USER":rw "$dev" 2>/dev/null || true
+    done
 fi
 
 $SUDO_CMD gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
@@ -78,6 +93,7 @@ $SUDO_CMD update-desktop-database /usr/share/applications 2>/dev/null || true
 
 echo "    ✓ Updated /usr/bin/manguesechee-agent"
 echo "    ✓ Updated /usr/bin/manguesechee-ui"
+echo "    ✓ Applied udev rules & /dev/uinput permissions"
 
 # ── 4. Restart Running Agent Service ─────────────────────────────────────────
 
