@@ -105,30 +105,37 @@ async fn handle(
     let peer_ip = peer_addr.ip().to_string();
     let peer_target_addr = format!("{peer_ip}:24800");
 
-    {
+    let existing_pos = {
         let mut s = ipc_state.lock().unwrap();
         if let Some(existing) = s.peers.iter_mut().find(|p| p.address.contains(&peer_ip) || p.name == _peer_name) {
             existing.paired = true;
             if !existing.address.contains(':') {
                 existing.address = peer_target_addr.clone();
             }
+            existing.position.clone()
         } else {
+            let pos = manguesechee_core::config::load().ok().and_then(|cfg| {
+                cfg.peers.iter().find(|p| p.address.as_deref().unwrap_or("").contains(&peer_ip) || p.id == peer_id)
+                    .map(|p| p.position.clone())
+            }).unwrap_or_else(|| "right".to_string());
+
             s.peers.push(manguesechee_core::ipc::PeerInfo {
                 name: _peer_name.clone(),
                 address: peer_target_addr.clone(),
                 paired: true,
                 connected: false,
-                position: "left".to_string(),
+                position: pos.clone(),
             });
+            pos
         }
-    }
+    };
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
         if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(&peer_ip)) {
             cfg.peers.push(manguesechee_core::config::PeerConfig {
                 id: peer_id.clone(),
                 address: Some(peer_target_addr.clone()),
-                position: "left".to_string(),
+                position: existing_pos,
             });
             let _ = manguesechee_core::config::save(&cfg);
         }
@@ -165,7 +172,14 @@ async fn handle(
     let mut edge = EdgeDetector::new(screen_width, screen_height);
 
     // Outbound channel — ReturnControl, Pong, and broadcast messages go here
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(8);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(16);
+    let clipboard_enabled = manguesechee_core::config::load()
+        .map(|c| c.clipboard.enabled)
+        .unwrap_or(true);
+    if clipboard_enabled {
+        clipboard::spawn_watcher(out_tx.clone());
+    }
+
     let mut broadcast_rx = broadcast_tx.subscribe();
     tokio::spawn(async move {
         loop {
@@ -188,14 +202,26 @@ async fn handle(
                       out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
         match msg {
             Message::EdgeCrossed { edge: entry } => {
-                edge.place_at_entry(&entry.opposite());
-                info!("cursor entered from {entry:?}");
+                let return_edge = entry.opposite();
+                edge.set_allowed_edge(Some(return_edge));
+                edge.place_at_entry(&return_edge);
+                info!("cursor entered from {return_edge:?} (controller exited {entry:?}) — return edge restricted to {return_edge:?}");
             }
 
             Message::InputEvent(event) => {
                 if let InputEvent::MouseMove { dx, dy } = &event {
                     if let Some(exit) = edge.update(*dx, *dy) {
                         info!("cursor left via {exit:?} — ReturnControl");
+                        // Immediate clipboard sync on returning control to controller
+                        if clipboard_enabled {
+                            if let Some(text) = clipboard::get_text() {
+                                if !text.is_empty() && !clipboard::is_already_synced(&text) {
+                                    info!("→ syncing clipboard on ReturnControl ({} bytes)", text.len());
+                                    clipboard::mark_synced(&text);
+                                    let _ = out_tx.try_send(Message::ClipboardSync { text });
+                                }
+                            }
+                        }
                         let _ = out_tx.try_send(Message::ReturnControl { edge: exit });
                     }
                 }
@@ -210,8 +236,10 @@ async fn handle(
 
             Message::ClipboardSync { text } => {
                 info!("← ClipboardSync ({} bytes)", text.len());
-                if let Err(e) = clipboard::set_text(&text) {
-                    warn!("clipboard set failed: {e}");
+                if clipboard_enabled {
+                    if let Err(e) = clipboard::set_text(&text) {
+                        warn!("clipboard set failed: {e}");
+                    }
                 }
             }
 
@@ -220,15 +248,18 @@ async fn handle(
                 info!("received TopologySync: peer set our position to {position} -> setting peer to {opp}");
                 {
                     let mut s = ipc_state.lock().unwrap();
+                    s.topology_configured = true;
+                    let single_peer = s.peers.len() == 1;
                     for p in &mut s.peers {
-                        if p.address.contains(&peer_ip) || p.name == _peer_name {
+                        if single_peer || p.address.contains(&peer_ip) || p.name == _peer_name {
                             p.position = opp.clone();
                         }
                     }
                 }
                 if let Ok(mut cfg) = manguesechee_core::config::load() {
+                    let single_peer = cfg.peers.len() == 1;
                     for p in &mut cfg.peers {
-                        if p.address.as_deref().unwrap_or("").contains(&peer_ip) {
+                        if single_peer || p.address.as_deref().unwrap_or("").contains(&peer_ip) || p.id == peer_id {
                             p.position = opp.clone();
                         }
                     }

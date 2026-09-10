@@ -68,11 +68,28 @@ check_tool() {
 
 case "$FORMAT" in
   deb)
+    apt-get update -qq 2>/dev/null || true
     check_tool dpkg-deb dpkg
+    check_tool pkg-config pkg-config
+    if ! pkg-config --exists fontconfig 2>/dev/null; then
+      echo "==> Installing fontconfig development headers (required for Slint UI)…"
+      apt-get install -y libfontconfig1-dev
+    fi
+    if ! pkg-config --exists xkbcommon 2>/dev/null; then
+      apt-get install -y libxkbcommon-dev 2>/dev/null || true
+    fi
     check_tool cargo    cargo   || true  # Rust installed separately
     ;;
   rpm)
     check_tool rpmbuild rpm-build
+    check_tool pkg-config pkgconf-pkg-config || true
+    if ! pkg-config --exists fontconfig 2>/dev/null; then
+      echo "==> Installing fontconfig development headers (required for Slint UI)…"
+      dnf install -y fontconfig-devel 2>/dev/null || true
+    fi
+    if ! pkg-config --exists xkbcommon 2>/dev/null; then
+      dnf install -y libxkbcommon-devel 2>/dev/null || true
+    fi
     check_tool cargo    cargo   || true
     ;;
 esac

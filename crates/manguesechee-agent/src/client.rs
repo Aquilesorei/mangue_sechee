@@ -33,6 +33,7 @@ impl Drop for PeerConnectedGuard {
         }
         if s.connected_to.as_deref() == Some(&self.addr) {
             s.connected_to = None;
+            s.topology_configured = false;
         }
     }
 }
@@ -83,26 +84,33 @@ pub async fn connect_to(
     }
 
     // Mark peer connected in IPC state
-    {
+    let existing_pos = {
         let mut s = ipc_state.lock().unwrap();
         s.connected_to = Some(addr.to_string());
         s.last_error = None;
-        if let Some(p) = s.peers.iter_mut().find(|p| p.address == addr || addr.contains(&p.address) || p.name == peer_name) {
+        if let Some(p) = s.peers.iter_mut().find(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(addr) || p.name == peer_name) {
             p.connected = true;
             p.paired = true;
             if !p.address.contains(':') {
                 p.address = addr.to_string();
             }
+            p.position.clone()
         } else {
+            let pos = manguesechee_core::config::load().ok().and_then(|cfg| {
+                cfg.peers.iter().find(|p| p.address.as_deref().unwrap_or("").contains(addr) || addr.contains(p.address.as_deref().unwrap_or("!@#$")) || p.id == peer_id)
+                    .map(|p| p.position.clone())
+            }).unwrap_or_else(|| "right".to_string());
+
             s.peers.push(manguesechee_core::ipc::PeerInfo {
                 name: peer_name.clone(),
                 address: addr.to_string(),
                 paired: true,
                 connected: true,
-                position: "right".to_string(),
+                position: pos.clone(),
             });
+            pos
         }
-    }
+    };
     let _conn_guard = PeerConnectedGuard {
         ipc_state: Arc::clone(&ipc_state),
         addr: addr.to_string(),
@@ -113,7 +121,7 @@ pub async fn connect_to(
             cfg.peers.push(manguesechee_core::config::PeerConfig {
                 id: peer_id.clone(),
                 address: Some(addr.to_string()),
-                position: "right".to_string(),
+                position: existing_pos,
             });
             let _ = manguesechee_core::config::save(&cfg);
         }
@@ -208,8 +216,12 @@ pub async fn connect_to(
     // ── Clipboard watcher ─────────────────────────────────────────────────────
     // Outgoing clipboard messages share the main sender via a dedicated channel.
     let (clip_msg_tx, mut clip_msg_rx) = mpsc::channel::<Message>(16);
-    let (clip_active_tx, clip_active_rx) = mpsc::channel::<bool>(4);
-    clipboard::spawn_watcher(clip_msg_tx, clip_active_rx);
+    let clipboard_enabled = manguesechee_core::config::load()
+        .map(|c| c.clipboard.enabled)
+        .unwrap_or(true);
+    if clipboard_enabled {
+        clipboard::spawn_watcher(clip_msg_tx);
+    }
 
     // ── ReturnControl & Message listener ─────────────────────────────────────
     let (return_tx, mut return_rx) = mpsc::channel::<()>(4);
@@ -222,20 +234,40 @@ pub async fn connect_to(
                     info!("← ReturnControl ({edge:?})");
                     let _ = return_tx.send(()).await;
                 }
+                Ok(Message::ClipboardSync { text }) => {
+                    info!("← ClipboardSync from server ({} bytes)", text.len());
+                    if clipboard_enabled {
+                        if let Err(e) = clipboard::set_text(&text) {
+                            warn!("failed to set local clipboard: {e}");
+                        }
+                    }
+                }
                 Ok(Message::TopologySync { position }) => {
                     let opp = manguesechee_core::protocol::opposite_position(&position).to_string();
                     info!("client: received TopologySync: remote set position to {position} -> setting local peer to {opp}");
                     {
                         let mut s = state_for_recv.lock().unwrap();
+                        s.topology_configured = true;
+                        let single_peer = s.peers.len() == 1;
                         for p in &mut s.peers {
-                            if p.address == peer_addr_str || peer_addr_str.contains(&p.address) {
+                            if single_peer
+                                || p.address == peer_addr_str
+                                || peer_addr_str.contains(&p.address)
+                                || p.address.contains(&peer_addr_str)
+                            {
                                 p.position = opp.clone();
                             }
                         }
                     }
                     if let Ok(mut cfg) = manguesechee_core::config::load() {
+                        let single_peer = cfg.peers.len() == 1;
                         for p in &mut cfg.peers {
-                            if p.address.as_deref().unwrap_or("") == peer_addr_str || peer_addr_str.contains(p.address.as_deref().unwrap_or("!@#$")) {
+                            let p_addr = p.address.as_deref().unwrap_or("");
+                            if single_peer
+                                || p_addr == peer_addr_str
+                                || peer_addr_str.contains(p_addr)
+                                || (!p_addr.is_empty() && p_addr.contains(&peer_addr_str))
+                            {
                                 p.position = opp.clone();
                             }
                         }
@@ -268,28 +300,40 @@ pub async fn connect_to(
                 match state {
                     ControllerState::Local => {
                         if let InputEvent::MouseMove { dx, dy } = &event {
-                            if let Some(crossed) = edge.update(*dx, *dy) {
-                                // Dynamic peer target edge resolution
-                                let target_edge = {
-                                    let s = ipc_state.lock().unwrap();
-                                    s.peers.iter()
-                                        .find(|p| p.address == addr || addr.contains(&p.address))
-                                        .map(|p| match p.position.to_lowercase().as_str() {
-                                            "left" => Edge::Left,
-                                            "above" | "top" => Edge::Top,
-                                            "below" | "bottom" => Edge::Bottom,
-                                            _ => Edge::Right,
-                                        })
-                                        .unwrap_or(Edge::Right)
-                                };
+                            // Dynamic peer target edge resolution
+                            let target_edge = {
+                                let s = ipc_state.lock().unwrap();
+                                let single_peer = s.peers.len() == 1;
+                                s.peers.iter()
+                                    .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
+                                    .map(|p| match p.position.to_lowercase().as_str() {
+                                        "left" => Edge::Left,
+                                        "above" | "top" => Edge::Top,
+                                        "below" | "bottom" => Edge::Bottom,
+                                        _ => Edge::Right,
+                                    })
+                                    .unwrap_or(Edge::Right)
+                            };
+                            edge.set_allowed_edge(Some(target_edge));
 
+                            if let Some(crossed) = edge.update(*dx, *dy) {
                                 if crossed == target_edge {
                                     info!("→ EdgeCrossed ({crossed:?}) matching target {target_edge:?} — grabbing");
                                     let _ = grab_mouse_tx.send(true);
                                     let _ = grab_keyboard_tx.send(true);
-                                    let _ = clip_active_tx.send(true).await;
                                     sender.send(&Message::EdgeCrossed { edge: crossed }).await?;
                                     state = ControllerState::Forwarding;
+
+                                    // Immediate clipboard sync on entering peer screen
+                                    if clipboard_enabled {
+                                        if let Some(text) = clipboard::get_text() {
+                                            if !text.is_empty() && !clipboard::is_already_synced(&text) {
+                                                info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
+                                                clipboard::mark_synced(&text);
+                                                let _ = sender.send(&Message::ClipboardSync { text }).await;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -302,8 +346,9 @@ pub async fn connect_to(
 
             // Outgoing clipboard change
             Some(clip_msg) = clip_msg_rx.recv() => {
-                if state == ControllerState::Forwarding {
-                    sender.send(&clip_msg).await?;
+                if let Err(e) = sender.send(&clip_msg).await {
+                    warn!("failed to send clipboard sync: {e}");
+                    break;
                 }
             }
 
@@ -320,10 +365,22 @@ pub async fn connect_to(
                 info!("← ReturnControl — ungrabbing, back to local");
                 let _ = grab_mouse_tx.send(false);
                 let _ = grab_keyboard_tx.send(false);
-                let _ = clip_active_tx.send(false).await;
                 state = ControllerState::Local;
-                edge = EdgeDetector::new(screen_width, screen_height)
-                    .with_settings(deadzone_px, delay_ms, ipc_state.lock().unwrap().cursor_locked);
+                let target_edge = {
+                    let s = ipc_state.lock().unwrap();
+                    let single_peer = s.peers.len() == 1;
+                    s.peers.iter()
+                        .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
+                        .map(|p| match p.position.to_lowercase().as_str() {
+                            "left" => Edge::Left,
+                            "above" | "top" => Edge::Top,
+                            "below" | "bottom" => Edge::Bottom,
+                            _ => Edge::Right,
+                        })
+                        .unwrap_or(Edge::Right)
+                };
+                edge.set_allowed_edge(Some(target_edge));
+                edge.place_at_entry(&target_edge);
             }
         }
     }

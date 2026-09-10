@@ -68,10 +68,20 @@ case "$FORMAT" in
       echo "error: dpkg-deb not found. Install: sudo apt install dpkg"
       exit 1
     fi
+    if ! command -v pkg-config &>/dev/null || ! pkg-config --exists fontconfig 2>/dev/null; then
+      echo "error: fontconfig development libraries not found."
+      echo "  Install via: sudo apt install -y pkg-config libfontconfig1-dev libxkbcommon-dev"
+      exit 1
+    fi
     ;;
   rpm)
     if ! command -v rpmbuild &>/dev/null; then
       echo "error: rpmbuild not found. Install: sudo dnf install rpm-build"
+      exit 1
+    fi
+    if ! command -v pkg-config &>/dev/null || ! pkg-config --exists fontconfig 2>/dev/null; then
+      echo "error: fontconfig development libraries not found."
+      echo "  Install via: sudo dnf install -y pkgconf-pkg-config fontconfig-devel libxkbcommon-devel"
       exit 1
     fi
     ;;

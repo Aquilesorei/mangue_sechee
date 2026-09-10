@@ -46,9 +46,16 @@ Move the cursor past the right screen edge — control switches to the peer. Mov
 - Linux kernel with evdev and uinput
 - Wayland (COSMIC, GNOME, KDE) or X11
 - Local network (Wi-Fi or Ethernet)
-- Rust toolchain
-
----
+- Rust toolchain (1.75+)
+- Fontconfig & pkg-config build libraries (required by Slint UI):
+  - **Pop!_OS / Ubuntu / Debian**:
+    ```sh
+    sudo apt update && sudo apt install -y pkg-config libfontconfig1-dev libxkbcommon-dev
+    ```
+  - **Fedora / RHEL**:
+    ```sh
+    sudo dnf install -y pkgconf-pkg-config fontconfig-devel libxkbcommon-devel
+    ```
 
 ---
 
@@ -95,6 +102,16 @@ Resulting packages are placed in `dist/`:
 You can transfer and install the package on target machines using:
 - Fedora: `sudo dnf install ./dist/x86_64/manguesechee-*.rpm`
 - Pop!_OS: `sudo apt install ./dist/manguesechee_*.deb`
+
+### Fast Update to Latest Build
+
+To update an existing installation after pulling git updates:
+
+```sh
+sudo ./dist/update.sh
+```
+
+This compiles release binaries, ensures required build libraries, installs `/usr/bin/manguesechee-agent` and `/usr/bin/manguesechee-ui`, and restarts the user service without overwriting your custom configuration.
 
 ---
 

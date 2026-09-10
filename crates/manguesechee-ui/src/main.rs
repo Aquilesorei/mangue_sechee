@@ -93,6 +93,13 @@ fn main() -> anyhow::Result<()> {
                 });
             }
 
+            if cfg.screen.width == 1920 && cfg.screen.height == 1080 {
+                if let Some((w_det, h_det)) = manguesechee_input::try_detect_screen_size() {
+                    cfg.screen.width = w_det;
+                    cfg.screen.height = h_det;
+                }
+            }
+
             if let Err(e) = config::save(&cfg) {
                 w.set_status(format!("Config error: {e}").into());
                 return;
@@ -198,6 +205,11 @@ fn main() -> anyhow::Result<()> {
             let pos_clean = pos.trim().to_lowercase();
             let mut cfg = config::load().unwrap_or_default();
 
+            // Prune phantom peers without address if any valid peer exists
+            if cfg.peers.len() > 1 && cfg.peers.iter().any(|p| p.address.as_ref().map(|a| !a.trim().is_empty()).unwrap_or(false)) {
+                cfg.peers.retain(|p| p.address.as_ref().map(|a| !a.trim().is_empty()).unwrap_or(false));
+            }
+
             if cfg.peers.is_empty() {
                 cfg.peers.push(config::PeerConfig {
                     id: "primary-peer".to_string(),
@@ -213,10 +225,18 @@ fn main() -> anyhow::Result<()> {
             let _ = config::save(&cfg);
             w.set_setting_peer_pos(pos_clean.clone().into());
             w.set_settings_feedback(format!("✓ Topology synced: Peer positioned on the {pos_clean}").into());
+            w.set_topology_configured(true);
+            let pos_disp = match pos_clean.as_str() {
+                "left" => "Left",
+                "above" => "Above (Top)",
+                "below" => "Below (Bottom)",
+                _ => "Right",
+            };
+            w.set_topology_notice(format!("Peer screen arranged on your {pos_disp} (synchronized with peer).").into());
 
             // Sync live over IPC to agent & network broadcast to peer
-            let target_addr = cfg.peers.first()
-                .and_then(|p| p.address.clone())
+            let target_addr = cfg.peers.iter()
+                .find_map(|p| p.address.clone().filter(|a| !a.trim().is_empty()))
                 .unwrap_or_default();
             send_ipc(ipc::GuiCommand::SyncTopology {
                 address: target_addr,
@@ -230,10 +250,13 @@ fn main() -> anyhow::Result<()> {
         let w = window.as_weak();
         window.on_auto_detect_screen(move || {
             let Some(w) = w.upgrade() else { return };
-            let (width, height) = manguesechee_input::detect_screen_size();
-            w.set_setting_width(width.to_string().into());
-            w.set_setting_height(height.to_string().into());
-            w.set_settings_feedback(format!("✓ Auto-detected screen geometry: {width}×{height}").into());
+            if let Some((width, height)) = manguesechee_input::try_detect_screen_size() {
+                w.set_setting_width(width.to_string().into());
+                w.set_setting_height(height.to_string().into());
+                w.set_settings_feedback(format!("✓ Auto-detected screen geometry: {width}×{height}").into());
+            } else {
+                w.set_settings_feedback("⚠ Hardware detection unavailable; keeping configured geometry".into());
+            }
         });
     }
 
@@ -436,6 +459,14 @@ fn main() -> anyhow::Result<()> {
             w.set_peers(peers.as_slice().into());
             w.set_setting_peer_pos(pos_str.clone().into());
             w.set_settings_feedback(format!("✓ Position updated & synced: peer placed on the {pos_str}").into());
+            w.set_topology_configured(true);
+            let pos_disp = match pos_str.as_str() {
+                "left" => "Left",
+                "above" => "Above (Top)",
+                "below" => "Below (Bottom)",
+                _ => "Right",
+            };
+            w.set_topology_notice(format!("Peer screen arranged on your {pos_disp}.").into());
         });
     }
 
@@ -446,6 +477,8 @@ fn main() -> anyhow::Result<()> {
             send_ipc(ipc::GuiCommand::Connect { address: addr.to_string() });
             if let Some(w) = w.upgrade() {
                 w.set_connection_error("".into());
+                w.set_topology_configured(false);
+                w.set_topology_notice("".into());
                 w.set_status(format!("Connecting to {addr}…").into());
             }
         });
@@ -456,6 +489,8 @@ fn main() -> anyhow::Result<()> {
             send_ipc(ipc::GuiCommand::Disconnect);
             if let Some(w) = w.upgrade() {
                 w.set_connected_peer("".into());
+                w.set_topology_configured(false);
+                w.set_topology_notice("".into());
                 w.set_status("Disconnected".into());
             }
         });
@@ -493,7 +528,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, peers, cursor_locked, last_error,
+                    local_name, connected_to, discovery, peers, cursor_locked, last_error, topology_configured,
                 }) = poll_status()
                 {
                     w.set_local_name(local_name.into());
@@ -511,6 +546,8 @@ fn main() -> anyhow::Result<()> {
 
                     // Connected peer detection
                     let active_peer_info = peers.iter().find(|p| p.connected);
+                    let is_connected = connected_to.is_some() || active_peer_info.is_some();
+
                     if let Some(ref p) = connected_to {
                         let peer_name = peers.iter()
                             .find(|item| item.address == *p || p.contains(&item.address))
@@ -523,6 +560,41 @@ fn main() -> anyhow::Result<()> {
                         w.set_connection_error("".into());
                     } else {
                         w.set_connected_peer("".into());
+                    }
+
+                    // Topology synchronization state
+                    if !is_connected {
+                        w.set_topology_configured(false);
+                        w.set_topology_notice("".into());
+                    } else {
+                        let active_pos = peers.iter()
+                            .find(|p| p.connected || connected_to.as_deref() == Some(&p.address))
+                            .map(|p| p.position.clone())
+                            .unwrap_or_else(|| w.get_setting_peer_pos().to_string());
+                        let clean_pos = active_pos.to_lowercase();
+
+                        if topology_configured {
+                            let prev_configured = w.get_topology_configured();
+                            w.set_topology_configured(true);
+                            if !clean_pos.is_empty() && w.get_setting_peer_pos().to_string() != clean_pos {
+                                w.set_setting_peer_pos(clean_pos.clone().into());
+                            }
+                            if !prev_configured || w.get_topology_notice().is_empty() {
+                                let pos_display = match clean_pos.as_str() {
+                                    "left" => "Left",
+                                    "above" => "Above (Top)",
+                                    "below" => "Below (Bottom)",
+                                    _ => "Right",
+                                };
+                                let peer_name = peers.iter()
+                                    .find(|p| p.connected || connected_to.as_deref() == Some(&p.address))
+                                    .map(|p| p.name.clone())
+                                    .unwrap_or_else(|| "peer".to_string());
+                                w.set_topology_notice(format!("Screen arranged on your {pos_display} (synchronized with {peer_name}).").into());
+                            }
+                        } else if !clean_pos.is_empty() && w.get_setting_peer_pos().to_string() != clean_pos {
+                            w.set_setting_peer_pos(clean_pos.into());
+                        }
                     }
 
                     let current_peers: Vec<PeerEntry> = w.get_peers().iter().collect();

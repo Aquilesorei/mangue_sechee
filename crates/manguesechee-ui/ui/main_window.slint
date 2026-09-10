@@ -36,6 +36,8 @@ export component MainWindow inherits Window {
     in-out property <[string]>    log-lines:          [];
     in-out property <string>      connected-peer:     "";
     in-out property <string>      connection-error:   "";
+    in-out property <bool>        topology-configured: false;
+    in-out property <string>      topology-notice:     "";
     callback dismiss-error();
 
     // ── Wizard Properties ───────────────────────────────────────────────────
@@ -366,8 +368,8 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // ── Connection Success Banner with Jump to Topology ──────────
-                    if root.connected-peer != "" : Rectangle {
+                    // ── Connection Success Banner with Jump to Topology (Hidden once topology is set) ──
+                    if root.connected-peer != "" && !root.topology-configured : Rectangle {
                         background: #0f2e1b; border-radius: 8px; border-width: 1px; border-color: #22c55e;
                         HorizontalBox {
                             padding: 12px; spacing: 14px;
@@ -390,6 +392,37 @@ export component MainWindow inherits Window {
                                 text: "📐 Configure Screen Topology →";
                                 primary: true;
                                 clicked => { root.active-tab = 1; }
+                            }
+                        }
+                    }
+
+                    // ── Topology Configured & Synced Banner ───────────────────────
+                    if root.connected-peer != "" && root.topology-configured && root.topology-notice != "" : Rectangle {
+                        background: #141f36; border-radius: 8px; border-width: 1px; border-color: #3b82f6;
+                        HorizontalBox {
+                            padding: 12px; spacing: 14px;
+                            Rectangle {
+                                width: 10px; height: 10px; border-radius: 5px; background: #3b82f6;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            VerticalBox {
+                                spacing: 2px; horizontal-stretch: 1;
+                                Text {
+                                    text: "✓ Screen Topology Configured & Synced";
+                                    font-size: 14px; font-weight: 700; color: #60a5fa;
+                                }
+                                Text {
+                                    text: root.topology-notice;
+                                    font-size: 12px; color: #bfdbfe;
+                                }
+                            }
+                            Button {
+                                text: "📐 Adjust Layout";
+                                clicked => { root.active-tab = 1; }
+                            }
+                            Button {
+                                text: "✕";
+                                clicked => { root.topology-notice = ""; }
                             }
                         }
                     }

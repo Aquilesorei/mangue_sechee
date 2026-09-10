@@ -181,10 +181,8 @@ fn parse_args(args: &[String], cfg: &config::Config) -> Opts {
     let mut peer_addr     = None;
     let mut mouse_path    = cfg.input.mouse_device.as_deref().map(PathBuf::from);
     let mut keyboard_path = cfg.input.keyboard_device.as_deref().map(PathBuf::from);
-    let mut screen_width  = cfg.screen.width;
-    let mut screen_height = cfg.screen.height;
-    let mut width_set     = false;
-    let mut height_set    = false;
+    let mut cli_width     = None;
+    let mut cli_height    = None;
     let mut i = 1;
 
     while i < args.len() {
@@ -195,25 +193,33 @@ fn parse_args(args: &[String], cfg: &config::Config) -> Opts {
             "--keyboard" => { i += 1; keyboard_path = args.get(i).map(PathBuf::from); }
             "--width"    => {
                 i += 1;
-                if let Some(v) = args.get(i) { screen_width  = v.parse().unwrap_or(screen_width); width_set  = true; }
+                if let Some(v) = args.get(i) { cli_width  = v.parse().ok(); }
             }
             "--height"   => {
                 i += 1;
-                if let Some(v) = args.get(i) { screen_height = v.parse().unwrap_or(screen_height); height_set = true; }
+                if let Some(v) = args.get(i) { cli_height = v.parse().ok(); }
             }
             _ => {}
         }
         i += 1;
     }
 
-    // If neither CLI nor config provided explicit dimensions, detect from DRM
-    // (works on Wayland/COSMIC without requiring X11).
-    let config_is_default = cfg.screen.width == 1920 && cfg.screen.height == 1080;
-    if config_is_default && !width_set && !height_set {
-        let (w, h) = manguesechee_input::detect_screen_size();
-        screen_width  = w;
-        screen_height = h;
-    }
+    // Screen dimension detection is the default; use config as fallback
+    let (detected_width, detected_height) = match manguesechee_input::try_detect_screen_size() {
+        Some((w, h)) if w > 0 && h > 0 => {
+            info!("using auto-detected display dimensions: {w}×{h}");
+            (w, h)
+        }
+        _ => {
+            let fw = if cfg.screen.width > 0 { cfg.screen.width } else { 1920 };
+            let fh = if cfg.screen.height > 0 { cfg.screen.height } else { 1080 };
+            info!("screen detection unavailable, using fallback dimensions from config: {fw}×{fh}");
+            (fw, fh)
+        }
+    };
+
+    let screen_width  = cli_width.unwrap_or(detected_width);
+    let screen_height = cli_height.unwrap_or(detected_height);
 
     let peer_addr = peer_addr.or_else(|| {
         cfg.peers.iter().find_map(|p| p.address.clone())

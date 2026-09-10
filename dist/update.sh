@@ -32,6 +32,26 @@ TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null || echo "1000")
 
 # ── 2. Build Release Binaries ────────────────────────────────────────────────
 
+# Ensure build prerequisites are met
+if ! command -v pkg-config &>/dev/null || ! pkg-config --exists fontconfig 2>/dev/null; then
+    echo "==> Installing build prerequisites (pkg-config, fontconfig)…"
+    if command -v apt-get &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y pkg-config libfontconfig1-dev libxkbcommon-dev
+        else
+            sudo apt-get update -qq 2>/dev/null || true
+            sudo apt-get install -y pkg-config libfontconfig1-dev libxkbcommon-dev
+        fi
+    elif command -v dnf &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            dnf install -y pkgconf-pkg-config fontconfig-devel libxkbcommon-devel
+        else
+            sudo dnf install -y pkgconf-pkg-config fontconfig-devel libxkbcommon-devel
+        fi
+    fi
+fi
+
 echo "==> Building updated release binaries…"
 cd "$REPO_ROOT"
 

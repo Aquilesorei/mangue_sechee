@@ -31,12 +31,13 @@ pub enum GuiCommand {
 #[serde(tag = "type")]
 pub enum AgentEvent {
     Status {
-        local_name:    String,
-        connected_to:  Option<String>,
-        discovery:     bool,
-        cursor_locked: bool,
-        last_error:    Option<String>,
-        peers:         Vec<PeerInfo>,
+        local_name:          String,
+        connected_to:        Option<String>,
+        discovery:           bool,
+        cursor_locked:       bool,
+        last_error:          Option<String>,
+        topology_configured: bool,
+        peers:               Vec<PeerInfo>,
     },
     Ok,
     Error { message: String },

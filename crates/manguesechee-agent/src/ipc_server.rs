@@ -9,12 +9,13 @@ use tracing::{info, warn};
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentState {
-    pub local_name:    String,
-    pub connected_to:  Option<String>,
-    pub discovery:     bool,
-    pub cursor_locked: bool,
-    pub last_error:    Option<String>,
-    pub peers:         Vec<PeerInfo>,
+    pub local_name:          String,
+    pub connected_to:        Option<String>,
+    pub discovery:           bool,
+    pub cursor_locked:       bool,
+    pub last_error:          Option<String>,
+    pub topology_configured: bool,
+    pub peers:               Vec<PeerInfo>,
 }
 
 pub type SharedState = Arc<Mutex<AgentState>>;
@@ -90,12 +91,13 @@ fn handle_command(
         GuiCommand::GetStatus => {
             let s = state.lock().unwrap();
             AgentEvent::Status {
-                local_name:    s.local_name.clone(),
-                connected_to:  s.connected_to.clone(),
-                discovery:     s.discovery,
-                cursor_locked: s.cursor_locked,
-                last_error:    s.last_error.clone(),
-                peers:         s.peers.clone(),
+                local_name:          s.local_name.clone(),
+                connected_to:        s.connected_to.clone(),
+                discovery:           s.discovery,
+                cursor_locked:       s.cursor_locked,
+                last_error:          s.last_error.clone(),
+                topology_configured: s.topology_configured,
+                peers:               s.peers.clone(),
             }
         }
         GuiCommand::Connect { address } => {
@@ -105,7 +107,9 @@ fn handle_command(
             AgentEvent::Ok
         }
         GuiCommand::Disconnect => {
-            state.lock().unwrap().connected_to = None;
+            let mut s = state.lock().unwrap();
+            s.connected_to = None;
+            s.topology_configured = false;
             AgentEvent::Ok
         }
         GuiCommand::SetDiscovery { enabled } => {
@@ -141,15 +145,32 @@ fn handle_command(
             let pos_clean = position.trim().to_lowercase();
             {
                 let mut s = state.lock().unwrap();
+                s.topology_configured = true;
+                let single_peer = s.peers.len() == 1;
                 for p in &mut s.peers {
-                    if p.address == address || address.contains(&p.address) {
+                    if address.is_empty()
+                        || single_peer
+                        || p.address == address
+                        || address.contains(&p.address)
+                        || p.address.contains(&address)
+                    {
                         p.position = pos_clean.clone();
                     }
                 }
             }
             if let Ok(mut cfg) = manguesechee_core::config::load() {
+                // If there are real peer entries with addresses, prune phantom peers without address
+                if cfg.peers.len() > 1 && cfg.peers.iter().any(|p| p.address.as_ref().map(|a| !a.trim().is_empty()).unwrap_or(false)) {
+                    cfg.peers.retain(|p| p.address.as_ref().map(|a| !a.trim().is_empty()).unwrap_or(false));
+                }
+                let single_peer = cfg.peers.len() == 1;
                 for p in &mut cfg.peers {
-                    if p.address.as_deref().unwrap_or("") == address || address.contains(p.address.as_deref().unwrap_or("!@#$")) {
+                    if address.is_empty()
+                        || single_peer
+                        || p.address.as_deref().unwrap_or("") == address
+                        || address.contains(p.address.as_deref().unwrap_or("!@#$"))
+                        || p.address.as_deref().unwrap_or("").contains(&address)
+                    {
                         p.position = pos_clean.clone();
                     }
                 }
