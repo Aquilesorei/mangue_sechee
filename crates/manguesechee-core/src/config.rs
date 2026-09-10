@@ -147,8 +147,29 @@ pub fn ensure_default() -> anyhow::Result<Config> {
 }
 
 fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .map(|s| s.trim().to_string())
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
+    if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(name) = std::env::var("HOSTNAME") {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let mut buf = [0u8; 256];
+    let res = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if res == 0 {
+        if let Ok(cstr) = std::ffi::CStr::from_bytes_until_nul(&buf) {
+            if let Ok(s) = cstr.to_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    "manguesechee-device".to_string()
 }

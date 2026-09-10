@@ -50,33 +50,51 @@ Move the cursor past the right screen edge — control switches to the peer. Mov
 
 ---
 
-## Setup
+---
 
-### Permissions (all machines)
+## Installation & Packaging
 
-```sh
-sudo usermod -aG input,uinput $USER && logout
-```
+Manguesechee includes automated packaging scripts for RPM-based (Fedora, RHEL) and DEB-based (Pop!_OS, Ubuntu, Debian) distributions.
 
-Log back in after running this. Without these groups the agent cannot open
-`/dev/input/event*` or `/dev/uinput`.
+### Automated Install (Recommended)
 
-### COSMIC / Wayland machines
+Run the install script with root privileges:
 
 ```sh
-sudo dnf install wl-clipboard   # for clipboard sync on Wayland
+sudo ./dist/install.sh
 ```
 
-`wl-clipboard` provides the `wl-copy` and `wl-paste` tools used by the
-clipboard sync backend. Without it clipboard sync logs a warning and continues
-without clipboard support.
+The script automatically:
+1. Detects distribution package manager (`dnf` or `apt`)
+2. Compiles release binaries and creates native `.rpm` or `.deb` packages
+3. Installs binaries to `/usr/bin/manguesechee-agent` and `/usr/bin/manguesechee-ui`
+4. Adds the current user to `input` and `uinput` groups
+5. Configures `/etc/udev/rules.d/99-manguesechee.rules` and persistent `uinput` kernel module
+6. Opens firewall ports (`24800/tcp` and `5353/udp` for mDNS) via `firewalld` or `ufw`
+7. Ensures clipboard tools (`wl-clipboard` for Wayland / COSMIC / KDE, `xclip` for X11) are present
+8. Configures initial `~/.config/manguesechee/config.toml` with the machine's hostname
+9. Enables and starts the systemd user service (`manguesechee-agent`)
+10. Installs application icons and `.desktop` launcher
 
-### X11 machines
+### Building Standalone Packages
+
+To build packages without immediately installing:
 
 ```sh
-sudo apt install xclip   # Debian / Ubuntu
-sudo dnf install xclip   # Fedora
+# Build .rpm (Fedora / KDE)
+./dist/package.sh --rpm
+
+# Build .deb (Pop!_OS / COSMIC)
+./dist/package.sh --deb
 ```
+
+Resulting packages are placed in `dist/`:
+- `dist/x86_64/manguesechee-<version>.rpm`
+- `dist/manguesechee_<version>_<arch>.deb`
+
+You can transfer and install the package on target machines using:
+- Fedora: `sudo dnf install ./dist/x86_64/manguesechee-*.rpm`
+- Pop!_OS: `sudo apt install ./dist/manguesechee_*.deb`
 
 ---
 

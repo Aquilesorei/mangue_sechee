@@ -106,6 +106,7 @@ build_deb() {
 
   install -Dm755 "$AGENT_BIN"  "$STAGE/usr/bin/manguesechee-agent"
   install -Dm755 "$UI_BIN"     "$STAGE/usr/bin/manguesechee-ui"
+  install -Dm755 "$DIST_DIR/post-install.sh" "$STAGE/usr/lib/manguesechee/post-install.sh"
   install -Dm644 "$SERVICE"    "$STAGE/usr/lib/systemd/user/manguesechee-agent.service"
   install -Dm644 "$UDEV"       "$STAGE/usr/lib/udev/rules.d/99-manguesechee.rules"
   install -Dm644 "$DESKTOP"    "$STAGE/usr/share/applications/manguesechee-ui.desktop"
@@ -121,7 +122,7 @@ Version: $VERSION
 Architecture: $ARCH_DEB
 Maintainer: $MAINTAINER
 Depends: libc6
-Recommends: wl-clipboard | xclip
+Recommends: wl-clipboard, xclip
 Description: $DESCRIPTION
 Homepage: $URL
 EOF
@@ -129,17 +130,9 @@ EOF
   cat > "$STAGE/DEBIAN/postinst" << 'EOF'
 #!/bin/sh
 set -e
-groupadd -f input  2>/dev/null || true
-groupadd -f uinput 2>/dev/null || true
-udevadm control --reload-rules 2>/dev/null || true
-udevadm trigger               2>/dev/null || true
-modprobe uinput               2>/dev/null || true
-update-icon-caches /usr/share/icons/hicolor 2>/dev/null || true
-echo ""
-echo "Manguesechee installed."
-echo "  sudo usermod -aG input,uinput \$USER && logout"
-echo "  systemctl --user enable --now manguesechee-agent"
-echo ""
+if [ -x /usr/lib/manguesechee/post-install.sh ]; then
+    /usr/lib/manguesechee/post-install.sh || true
+fi
 exit 0
 EOF
   chmod 755 "$STAGE/DEBIAN/postinst"
@@ -184,18 +177,20 @@ BuildArch:      $ARCH_RPM
 $DESCRIPTION
 
 %install
-install -Dm755 $AGENT_BIN  %{buildroot}/usr/bin/manguesechee-agent
-install -Dm755 $UI_BIN     %{buildroot}/usr/bin/manguesechee-ui
-install -Dm644 $SERVICE    %{buildroot}/usr/lib/systemd/user/manguesechee-agent.service
-install -Dm644 $UDEV       %{buildroot}/usr/lib/udev/rules.d/99-manguesechee.rules
-install -Dm644 $DESKTOP    %{buildroot}/usr/share/applications/manguesechee-ui.desktop
-install -Dm644 $ICON_256   %{buildroot}/usr/share/icons/hicolor/256x256/apps/manguesechee.png
-install -Dm644 $ICON_48    %{buildroot}/usr/share/icons/hicolor/48x48/apps/manguesechee.png
-install -Dm644 $REPO_ROOT/README.md %{buildroot}/usr/share/doc/manguesechee/README.md
+install -Dm755 $AGENT_BIN                   %{buildroot}/usr/bin/manguesechee-agent
+install -Dm755 $UI_BIN                      %{buildroot}/usr/bin/manguesechee-ui
+install -Dm755 $DIST_DIR/post-install.sh    %{buildroot}/usr/lib/manguesechee/post-install.sh
+install -Dm644 $SERVICE                     %{buildroot}/usr/lib/systemd/user/manguesechee-agent.service
+install -Dm644 $UDEV                        %{buildroot}/usr/lib/udev/rules.d/99-manguesechee.rules
+install -Dm644 $DESKTOP                     %{buildroot}/usr/share/applications/manguesechee-ui.desktop
+install -Dm644 $ICON_256                    %{buildroot}/usr/share/icons/hicolor/256x256/apps/manguesechee.png
+install -Dm644 $ICON_48                     %{buildroot}/usr/share/icons/hicolor/48x48/apps/manguesechee.png
+install -Dm644 $REPO_ROOT/README.md          %{buildroot}/usr/share/doc/manguesechee/README.md
 
 %files
 /usr/bin/manguesechee-agent
 /usr/bin/manguesechee-ui
+/usr/lib/manguesechee/post-install.sh
 /usr/lib/systemd/user/manguesechee-agent.service
 /usr/lib/udev/rules.d/99-manguesechee.rules
 /usr/share/applications/manguesechee-ui.desktop
@@ -204,18 +199,9 @@ install -Dm644 $REPO_ROOT/README.md %{buildroot}/usr/share/doc/manguesechee/READ
 /usr/share/doc/manguesechee/README.md
 
 %post
-groupadd -f input  2>/dev/null || true
-groupadd -f uinput 2>/dev/null || true
-udevadm control --reload-rules 2>/dev/null || true
-udevadm trigger               2>/dev/null || true
-modprobe uinput               2>/dev/null || true
-gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
-echo ""
-echo "Manguesechee installed."
-echo "  sudo usermod -aG input,uinput \$USER && logout"
-echo "  sudo dnf install wl-clipboard          # Wayland clipboard"
-echo "  systemctl --user enable --now manguesechee-agent"
-echo ""
+if [ -x /usr/lib/manguesechee/post-install.sh ]; then
+    /usr/lib/manguesechee/post-install.sh || true
+fi
 
 %preun
 systemctl --user stop    manguesechee-agent 2>/dev/null || true

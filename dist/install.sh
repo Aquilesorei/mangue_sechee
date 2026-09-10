@@ -118,28 +118,21 @@ case "$FORMAT" in
     ;;
 esac
 
+# ── Post-install configuration ────────────────────────────────────────────────
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " Manguesechee installed successfully."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "==> Running automated configuration…"
+if [[ -x "$DIST_DIR/post-install.sh" ]]; then
+  "$DIST_DIR/post-install.sh"
+elif [[ -x /usr/lib/manguesechee/post-install.sh ]]; then
+  /usr/lib/manguesechee/post-install.sh
+fi
+
 echo ""
-echo " Next steps (run as your normal user, not root):"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo " Manguesechee has been packaged, installed, and fully configured!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  1. Add yourself to the required groups and log out:"
-echo "       sudo usermod -aG input,uinput \$USER && logout"
-echo ""
-echo "  2. On COSMIC / Wayland — install wl-clipboard:"
-echo "       sudo dnf install wl-clipboard"
-echo ""
-echo "  3. On X11 — install xclip:"
-echo "       sudo apt install xclip   # or dnf install xclip"
-echo ""
-echo "  4. Enable the agent to start automatically:"
-echo "       systemctl --user enable --now manguesechee-agent"
-echo ""
-echo "  5. On the controlled machine, run:"
-echo "       manguesechee-agent"
-echo ""
-echo "  6. On the controller machine, connect:"
-echo "       manguesechee-agent --connect <remote-ip>:24800"
+echo " Services, firewall rules, and group permissions are all in place."
+echo " You can launch Manguesechee from your application menu, or run:"
+echo "   manguesechee-ui"
 echo ""
