@@ -81,8 +81,14 @@ pub fn generate_code() -> String {
 // ── Pairing prompt (terminal) ─────────────────────────────────────────────────
 
 /// Block on stdin and ask the user to accept or reject a pairing request.
-/// Returns true if accepted.
+/// In daemon mode (no terminal attached), automatically accepts the request and logs it.
 pub fn prompt_accept(peer_name: &str, code: &str) -> bool {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        info!("Pairing request received from '{peer_name}' (verification code: {code}) — auto-accepted (daemon mode)");
+        return true;
+    }
+
     println!();
     println!("┌──────────────────────────────────────────┐");
     println!("│         Manguesechee — Pair request       │");

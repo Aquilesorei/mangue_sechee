@@ -34,7 +34,10 @@ impl Drop for PidGuard {
     }
 }
 
-pub async fn run(state: SharedState) -> anyhow::Result<()> {
+pub async fn run(
+    state: SharedState,
+    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> anyhow::Result<()> {
     let path = ipc::socket_path();
     if let Some(p) = path.parent() { std::fs::create_dir_all(p)?; }
     let _ = std::fs::remove_file(&path);
@@ -44,8 +47,9 @@ pub async fn run(state: SharedState) -> anyhow::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let state = Arc::clone(&state);
+        let connect_tx = connect_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, state).await {
+            if let Err(e) = handle_client(stream, state, connect_tx).await {
                 warn!("IPC client: {e}");
             }
         });
@@ -55,12 +59,13 @@ pub async fn run(state: SharedState) -> anyhow::Result<()> {
 async fn handle_client(
     stream: tokio::net::UnixStream,
     state:  SharedState,
+    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     while let Some(line) = lines.next_line().await? {
         let event = match serde_json::from_str::<GuiCommand>(&line) {
-            Ok(cmd) => handle_command(cmd, &state),
+            Ok(cmd) => handle_command(cmd, &state, &connect_tx),
             Err(e)  => AgentEvent::Error { message: e.to_string() },
         };
         let mut resp = serde_json::to_string(&event)?;
@@ -70,7 +75,11 @@ async fn handle_client(
     Ok(())
 }
 
-fn handle_command(cmd: GuiCommand, state: &SharedState) -> AgentEvent {
+fn handle_command(
+    cmd: GuiCommand,
+    state: &SharedState,
+    connect_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) -> AgentEvent {
     match cmd {
         GuiCommand::GetStatus => {
             let s = state.lock().unwrap();
@@ -82,8 +91,8 @@ fn handle_command(cmd: GuiCommand, state: &SharedState) -> AgentEvent {
             }
         }
         GuiCommand::Connect { address } => {
-            info!("IPC: connect to {address}");
-            state.lock().unwrap().connected_to = Some(address);
+            info!("IPC: connect requested to {address}");
+            let _ = connect_tx.send(address);
             AgentEvent::Ok
         }
         GuiCommand::Disconnect => {

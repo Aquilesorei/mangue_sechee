@@ -58,10 +58,13 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         }
     ));
+    let (connect_tx, mut connect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
     {
         let state = Arc::clone(&ipc_state);
+        let ctx = connect_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = ipc_server::run(state).await {
+            if let Err(e) = ipc_server::run(state, ctx).await {
                 tracing::error!("IPC server: {e:#}");
             }
         });
@@ -72,8 +75,9 @@ async fn main() -> anyhow::Result<()> {
         let name = local_name.clone();
         let id   = local_id.clone();
         let port = opts.port;
+        let state = Arc::clone(&ipc_state);
         tokio::spawn(async move {
-            discovery::run(name, id, port).await;
+            discovery::run(name, id, port, state).await;
         });
     }
 
@@ -82,19 +86,39 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to start listener")?;
 
-    // ── Controller session (if --connect or config peer) ──────────────────────
-    if let Some(addr) = opts.peer_addr {
+    // ── Outbound controller session worker ───────────────────────────────────
+    {
         let name   = local_name.clone();
         let id     = local_id.clone();
-        let mouse  = opts.mouse_path;
-        let kb     = opts.keyboard_path;
+        let mouse  = opts.mouse_path.clone();
+        let kb     = opts.keyboard_path.clone();
         let w      = opts.screen_width;
         let h      = opts.screen_height;
+        let state  = Arc::clone(&ipc_state);
+
         tokio::spawn(async move {
-            if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h).await {
-                tracing::error!("controller session failed: {e:#}");
+            while let Some(addr) = connect_rx.recv().await {
+                let name = name.clone();
+                let id = id.clone();
+                let mouse = mouse.clone();
+                let kb = kb.clone();
+                let state = Arc::clone(&state);
+                info!("Starting controller connection to {addr}");
+
+                tokio::spawn(async move {
+                    state.lock().unwrap().connected_to = Some(addr.clone());
+                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h).await {
+                        tracing::error!("controller session to {addr} failed: {e:#}");
+                    }
+                    state.lock().unwrap().connected_to = None;
+                });
             }
         });
+    }
+
+    // Connect if --connect or config peer was specified at launch
+    if let Some(addr) = opts.peer_addr {
+        let _ = connect_tx.send(addr);
     }
 
     server::run(listener, local_name, local_id, opts.screen_width, opts.screen_height).await;
