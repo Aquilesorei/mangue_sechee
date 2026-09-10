@@ -52,10 +52,12 @@ fi
 
 echo "==> Configuring udev and persistent uinput module…"
 if [[ -f /usr/lib/udev/rules.d/99-manguesechee.rules ]]; then
+    cp -f /usr/lib/udev/rules.d/99-manguesechee.rules /etc/udev/rules.d/70-manguesechee.rules 2>/dev/null || true
     cp -f /usr/lib/udev/rules.d/99-manguesechee.rules /etc/udev/rules.d/99-manguesechee.rules 2>/dev/null || true
 fi
 udevadm control --reload-rules 2>/dev/null || true
-udevadm trigger 2>/dev/null || true
+udevadm trigger --subsystem-match=input 2>/dev/null || true
+udevadm trigger --subsystem-match=misc 2>/dev/null || true
 
 modprobe uinput 2>/dev/null || true
 mkdir -p /etc/modules-load.d

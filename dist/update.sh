@@ -95,10 +95,13 @@ fi
 
 # Update udev rules and ensure /dev/uinput permissions
 if [[ -f "$REPO_ROOT/dist/99-manguesechee.rules" ]]; then
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /etc/udev/rules.d/70-manguesechee.rules
     $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /etc/udev/rules.d/99-manguesechee.rules
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /usr/lib/udev/rules.d/70-manguesechee.rules 2>/dev/null || true
     $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/99-manguesechee.rules" /usr/lib/udev/rules.d/99-manguesechee.rules 2>/dev/null || true
     $SUDO_CMD udevadm control --reload-rules 2>/dev/null || true
-    $SUDO_CMD udevadm trigger 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=input 2>/dev/null || true
+    $SUDO_CMD udevadm trigger --subsystem-match=misc 2>/dev/null || true
 fi
 
 # Ensure /dev/uinput is immediately writable without requiring logout/reboot

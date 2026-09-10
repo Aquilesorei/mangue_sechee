@@ -5,7 +5,7 @@
 //! Call `grab()` when entering forwarding mode, `ungrab()` when returning.
 
 use anyhow::Context;
-use evdev::{InputEventKind, Key, RelativeAxisType};
+use evdev::{AbsoluteAxisType, InputEventKind, Key, PropType, RelativeAxisType};
 use manguesechee_core::events::{InputEvent, KeyCode, MouseButton};
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -13,20 +13,45 @@ use tracing::info;
 // ── MouseCapture ──────────────────────────────────────────────────────────────
 
 pub struct MouseCapture {
-    stream:     evdev::EventStream,
-    pending_dx: i32,
-    pending_dy: i32,
-    is_grabbed: bool,
+    stream:           evdev::EventStream,
+    pending_dx:       i32,
+    pending_dy:       i32,
+    pending_scroll_x: f32,
+    pending_scroll_y: f32,
+    is_grabbed:       bool,
+
+    // Touchpad (pavé tactile) tracking state
+    touch_active:     bool,
+    finger_count:     u8,
+    active_slot:      usize,
+    cur_x:            Option<i32>,
+    cur_y:            Option<i32>,
+    last_x:           Option<i32>,
+    last_y:           Option<i32>,
 }
 
 impl MouseCapture {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        info!("opening mouse: {}", path.display());
+        info!("opening pointer/touchpad device: {}", path.display());
         let device = evdev::Device::open(path)
             .with_context(|| format!("open {}", path.display()))?;
         info!("  → {}", device.name().unwrap_or("<unknown>"));
         let stream = device.into_event_stream()?;
-        Ok(Self { stream, pending_dx: 0, pending_dy: 0, is_grabbed: false })
+        Ok(Self {
+            stream,
+            pending_dx: 0,
+            pending_dy: 0,
+            pending_scroll_x: 0.0,
+            pending_scroll_y: 0.0,
+            is_grabbed: false,
+            touch_active: false,
+            finger_count: 0,
+            active_slot: 0,
+            cur_x: None,
+            cur_y: None,
+            last_x: None,
+            last_y: None,
+        })
     }
 
     /// Exclusively grab the device — local compositor stops seeing events.
@@ -34,7 +59,7 @@ impl MouseCapture {
         if !self.is_grabbed {
             self.stream.device_mut().grab()?;
             self.is_grabbed = true;
-            info!("mouse grabbed");
+            info!("pointer/touchpad grabbed");
         }
         Ok(())
     }
@@ -44,16 +69,90 @@ impl MouseCapture {
         if self.is_grabbed {
             let _ = self.stream.device_mut().ungrab();
             self.is_grabbed = false;
-            info!("mouse ungrabbed");
+            info!("pointer/touchpad ungrabbed");
         }
         Ok(())
     }
 
     pub async fn next_event(&mut self) -> anyhow::Result<InputEvent> {
         loop {
+            // Flush any pending scroll events
+            if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
+                let sx = if self.pending_scroll_x.abs() >= 1.0 {
+                    let s = self.pending_scroll_x.trunc();
+                    self.pending_scroll_x -= s;
+                    s
+                } else {
+                    0.0
+                };
+                let sy = if self.pending_scroll_y.abs() >= 1.0 {
+                    let s = self.pending_scroll_y.trunc();
+                    self.pending_scroll_y -= s;
+                    s
+                } else {
+                    0.0
+                };
+                return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
+            }
+
+            // Flush any pending mouse movement events
+            if self.pending_dx != 0 || self.pending_dy != 0 {
+                let e = InputEvent::MouseMove {
+                    dx: self.pending_dx,
+                    dy: self.pending_dy,
+                };
+                self.pending_dx = 0;
+                self.pending_dy = 0;
+                return Ok(e);
+            }
+
             let ev = self.stream.next_event().await?;
             match ev.kind() {
                 InputEventKind::Synchronization(_) => {
+                    // Compute touchpad movement / scroll deltas
+                    if self.touch_active {
+                        if let (Some(cx), Some(cy)) = (self.cur_x, self.cur_y) {
+                            if let (Some(lx), Some(ly)) = (self.last_x, self.last_y) {
+                                let dx = cx - lx;
+                                let dy = cy - ly;
+
+                                if dx != 0 || dy != 0 {
+                                    if self.finger_count >= 2 {
+                                        // Two-finger scroll: accumulate scroll
+                                        // In standard evdev coordinates, y increases downward.
+                                        // Moving fingers down (dy > 0) scrolls down (negative delta in wheel ticks).
+                                        self.pending_scroll_y -= (dy as f32) / 16.0;
+                                        self.pending_scroll_x -= (dx as f32) / 16.0;
+                                    } else {
+                                        // Single-finger: pointer movement
+                                        self.pending_dx += dx;
+                                        self.pending_dy += dy;
+                                    }
+                                }
+                            }
+                            self.last_x = Some(cx);
+                            self.last_y = Some(cy);
+                        }
+                    }
+
+                    if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
+                        let sx = if self.pending_scroll_x.abs() >= 1.0 {
+                            let s = self.pending_scroll_x.trunc();
+                            self.pending_scroll_x -= s;
+                            s
+                        } else {
+                            0.0
+                        };
+                        let sy = if self.pending_scroll_y.abs() >= 1.0 {
+                            let s = self.pending_scroll_y.trunc();
+                            self.pending_scroll_y -= s;
+                            s
+                        } else {
+                            0.0
+                        };
+                        return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
+                    }
+
                     if self.pending_dx != 0 || self.pending_dy != 0 {
                         let e = InputEvent::MouseMove {
                             dx: self.pending_dx,
@@ -64,6 +163,7 @@ impl MouseCapture {
                         return Ok(e);
                     }
                 }
+
                 InputEventKind::RelAxis(axis) => match axis {
                     RelativeAxisType::REL_X      => self.pending_dx += ev.value(),
                     RelativeAxisType::REL_Y      => self.pending_dy += ev.value(),
@@ -71,17 +171,137 @@ impl MouseCapture {
                     RelativeAxisType::REL_HWHEEL => return Ok(InputEvent::MouseScroll { dx: ev.value() as f32, dy: 0.0 }),
                     _ => {}
                 },
+
+                InputEventKind::AbsAxis(axis) => match axis {
+                    AbsoluteAxisType::ABS_MT_SLOT => {
+                        self.active_slot = ev.value() as usize;
+                    }
+                    AbsoluteAxisType::ABS_X => {
+                        self.cur_x = Some(ev.value());
+                        self.touch_active = true;
+                    }
+                    AbsoluteAxisType::ABS_Y => {
+                        self.cur_y = Some(ev.value());
+                        self.touch_active = true;
+                    }
+                    AbsoluteAxisType::ABS_MT_POSITION_X => {
+                        if self.active_slot == 0 {
+                            self.cur_x = Some(ev.value());
+                            self.touch_active = true;
+                        }
+                    }
+                    AbsoluteAxisType::ABS_MT_POSITION_Y => {
+                        if self.active_slot == 0 {
+                            self.cur_y = Some(ev.value());
+                            self.touch_active = true;
+                        }
+                    }
+                    AbsoluteAxisType::ABS_MT_TRACKING_ID => {
+                        if self.active_slot == 0 {
+                            if ev.value() < 0 {
+                                // Finger lifted
+                                self.cur_x = None;
+                                self.cur_y = None;
+                                self.last_x = None;
+                                self.last_y = None;
+                                self.touch_active = false;
+                                self.finger_count = 0;
+                            } else {
+                                self.touch_active = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+
                 InputEventKind::Key(key) => {
-                    let pressed = ev.value() != 0;
-                    let button = match key {
-                        Key::BTN_LEFT   => MouseButton::Left,
-                        Key::BTN_RIGHT  => MouseButton::Right,
-                        Key::BTN_MIDDLE => MouseButton::Middle,
-                        Key::BTN_SIDE   => MouseButton::Other(4),
-                        Key::BTN_EXTRA  => MouseButton::Other(5),
-                        _               => continue,
-                    };
-                    return Ok(InputEvent::MouseButton { button, pressed });
+                    match key {
+                        Key::BTN_TOUCH => {
+                            let pressed = ev.value() != 0;
+                            self.touch_active = pressed;
+                            if !pressed {
+                                self.cur_x = None;
+                                self.cur_y = None;
+                                self.last_x = None;
+                                self.last_y = None;
+                                self.finger_count = 0;
+                            }
+                        }
+                        Key::BTN_TOOL_FINGER => {
+                            let new_count = if ev.value() != 0 {
+                                1
+                            } else if self.finger_count == 1 {
+                                0
+                            } else {
+                                self.finger_count
+                            };
+                            if new_count != self.finger_count {
+                                self.finger_count = new_count;
+                                self.last_x = None;
+                                self.last_y = None;
+                            }
+                            if ev.value() != 0 {
+                                self.touch_active = true;
+                            }
+                        }
+                        Key::BTN_TOOL_DOUBLETAP => {
+                            let new_count = if ev.value() != 0 {
+                                2
+                            } else if self.finger_count == 2 {
+                                1
+                            } else {
+                                self.finger_count
+                            };
+                            if new_count != self.finger_count {
+                                self.finger_count = new_count;
+                                self.last_x = None;
+                                self.last_y = None;
+                            }
+                            if ev.value() != 0 {
+                                self.touch_active = true;
+                            }
+                        }
+                        Key::BTN_TOOL_TRIPLETAP => {
+                            let new_count = if ev.value() != 0 {
+                                3
+                            } else if self.finger_count == 3 {
+                                2
+                            } else {
+                                self.finger_count
+                            };
+                            if new_count != self.finger_count {
+                                self.finger_count = new_count;
+                                self.last_x = None;
+                                self.last_y = None;
+                            }
+                        }
+                        Key::BTN_LEFT => {
+                            let pressed = ev.value() != 0;
+                            let button = if self.finger_count == 2 {
+                                MouseButton::Right
+                            } else {
+                                MouseButton::Left
+                            };
+                            return Ok(InputEvent::MouseButton { button, pressed });
+                        }
+                        Key::BTN_RIGHT => {
+                            let pressed = ev.value() != 0;
+                            return Ok(InputEvent::MouseButton { button: MouseButton::Right, pressed });
+                        }
+                        Key::BTN_MIDDLE => {
+                            let pressed = ev.value() != 0;
+                            return Ok(InputEvent::MouseButton { button: MouseButton::Middle, pressed });
+                        }
+                        Key::BTN_SIDE => {
+                            let pressed = ev.value() != 0;
+                            return Ok(InputEvent::MouseButton { button: MouseButton::Other(4), pressed });
+                        }
+                        Key::BTN_EXTRA => {
+                            let pressed = ev.value() != 0;
+                            return Ok(InputEvent::MouseButton { button: MouseButton::Other(5), pressed });
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -205,6 +425,59 @@ fn sorted_event_entries() -> anyhow::Result<Vec<std::fs::DirEntry>> {
     Ok(entries)
 }
 
+fn is_mouse_or_touchpad(device: &evdev::Device) -> bool {
+    let name = device.name().unwrap_or("<unknown>");
+    let lower = name.to_lowercase();
+    if is_ignored_device(name) || lower.contains("touchscreen") {
+        return false;
+    }
+
+    // 1. Standard relative mouse (e.g. USB/Bluetooth/Wireless mouse)
+    let has_rel = device
+        .supported_relative_axes()
+        .map(|a| a.contains(RelativeAxisType::REL_X) && a.contains(RelativeAxisType::REL_Y))
+        .unwrap_or(false);
+    let has_mouse_btn = device
+        .supported_keys()
+        .map(|k| k.contains(Key::BTN_LEFT) || k.contains(Key::BTN_RIGHT))
+        .unwrap_or(false);
+
+    if has_rel && has_mouse_btn {
+        return true;
+    }
+
+    // 2. Touchpad / trackpad / pavé tactile
+    let has_abs = device
+        .supported_absolute_axes()
+        .map(|a| {
+            (a.contains(AbsoluteAxisType::ABS_X) && a.contains(AbsoluteAxisType::ABS_Y))
+                || (a.contains(AbsoluteAxisType::ABS_MT_POSITION_X) && a.contains(AbsoluteAxisType::ABS_MT_POSITION_Y))
+        })
+        .unwrap_or(false);
+
+    let has_touch_keys = device
+        .supported_keys()
+        .map(|k| {
+            k.contains(Key::BTN_TOOL_FINGER)
+                || k.contains(Key::BTN_TOUCH)
+                || k.contains(Key::BTN_LEFT)
+        })
+        .unwrap_or(false);
+
+    let props = device.properties();
+    let is_direct = props.contains(PropType::DIRECT);
+    let is_pointer = props.contains(PropType::POINTER)
+        || props.contains(PropType::BUTTONPAD)
+        || props.contains(PropType::SEMI_MT);
+    let name_indicates_touchpad = lower.contains("touchpad") || lower.contains("trackpad") || lower.contains("glidepoint");
+
+    if has_abs && has_touch_keys && !is_direct && (is_pointer || name_indicates_touchpad) {
+        return true;
+    }
+
+    false
+}
+
 pub fn find_all_mice() -> Vec<PathBuf> {
     let entries = match sorted_event_entries() {
         Ok(e) => e,
@@ -215,20 +488,8 @@ pub fn find_all_mice() -> Vec<PathBuf> {
         let path = entry.path();
         if let Ok(device) = evdev::Device::open(&path) {
             let name = device.name().unwrap_or("<unknown>");
-            if is_ignored_device(name) {
-                continue;
-            }
-            let has_rel = device
-                .supported_relative_axes()
-                .map(|a| a.contains(RelativeAxisType::REL_X) && a.contains(RelativeAxisType::REL_Y))
-                .unwrap_or(false);
-            let has_btn = device
-                .supported_keys()
-                .map(|k| k.contains(Key::BTN_LEFT))
-                .unwrap_or(false);
-
-            if has_rel && has_btn {
-                info!("found mouse: {} ({})", path.display(), name);
+            if is_mouse_or_touchpad(&device) {
+                info!("found pointer/touchpad: {} ({})", path.display(), name);
                 mice.push(path);
             }
         }

@@ -3,5 +3,5 @@
 KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput", MODE="0666"
 
 # evdev — capture physical input devices for active seat
-SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess", MODE="0660", GROUP="input"
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess", RUN{builtin}+="uaccess", MODE="0660", GROUP="input"
 
