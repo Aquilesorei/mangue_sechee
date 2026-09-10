@@ -124,15 +124,24 @@ async fn main() -> anyhow::Result<()> {
         let delay    = cfg.input.switch_delay_ms;
         let state  = Arc::clone(&ipc_state);
         let b_tx   = broadcast_tx.clone();
+        let connect_tx_retry = connect_tx.clone();
 
         tokio::spawn(async move {
             while let Some(addr) = connect_rx.recv().await {
+                {
+                    let s = state.lock().unwrap();
+                    if s.connected_to.as_deref() == Some(&addr) {
+                        info!("already connected or connecting to {addr} — skipping duplicate connect");
+                        continue;
+                    }
+                }
                 let name = name.clone();
                 let id = id.clone();
                 let mouse = mouse.clone();
                 let kb = kb.clone();
                 let state = Arc::clone(&state);
                 let b_tx = b_tx.clone();
+                let retry_tx = connect_tx_retry.clone();
                 info!("Starting controller connection to {addr}");
 
                 tokio::spawn(async move {
@@ -142,6 +151,17 @@ async fn main() -> anyhow::Result<()> {
                         state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
                     }
                     state.lock().unwrap().connected_to = None;
+
+                    // If still configured in peers, retry after 3 seconds
+                    let should_retry = {
+                        let s = state.lock().unwrap();
+                        s.peers.iter().any(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(&addr))
+                    };
+                    if should_retry {
+                        info!("will retry controller connection to {addr} in 3 seconds…");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        let _ = retry_tx.send(addr);
+                    }
                 });
             }
         });

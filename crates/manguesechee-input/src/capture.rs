@@ -16,6 +16,7 @@ pub struct MouseCapture {
     stream:     evdev::EventStream,
     pending_dx: i32,
     pending_dy: i32,
+    is_grabbed: bool,
 }
 
 impl MouseCapture {
@@ -25,20 +26,26 @@ impl MouseCapture {
             .with_context(|| format!("open {}", path.display()))?;
         info!("  → {}", device.name().unwrap_or("<unknown>"));
         let stream = device.into_event_stream()?;
-        Ok(Self { stream, pending_dx: 0, pending_dy: 0 })
+        Ok(Self { stream, pending_dx: 0, pending_dy: 0, is_grabbed: false })
     }
 
     /// Exclusively grab the device — local compositor stops seeing events.
     pub fn grab(&mut self) -> anyhow::Result<()> {
-        self.stream.device_mut().grab()?;
-        info!("mouse grabbed");
+        if !self.is_grabbed {
+            self.stream.device_mut().grab()?;
+            self.is_grabbed = true;
+            info!("mouse grabbed");
+        }
         Ok(())
     }
 
     /// Release the exclusive grab — local compositor sees events again.
     pub fn ungrab(&mut self) -> anyhow::Result<()> {
-        self.stream.device_mut().ungrab()?;
-        info!("mouse ungrabbed");
+        if self.is_grabbed {
+            let _ = self.stream.device_mut().ungrab();
+            self.is_grabbed = false;
+            info!("mouse ungrabbed");
+        }
         Ok(())
     }
 
@@ -82,10 +89,17 @@ impl MouseCapture {
     }
 }
 
+impl Drop for MouseCapture {
+    fn drop(&mut self) {
+        let _ = self.ungrab();
+    }
+}
+
 // ── KeyboardCapture ───────────────────────────────────────────────────────────
 
 pub struct KeyboardCapture {
-    stream: evdev::EventStream,
+    stream:     evdev::EventStream,
+    is_grabbed: bool,
 }
 
 impl KeyboardCapture {
@@ -95,18 +109,24 @@ impl KeyboardCapture {
             .with_context(|| format!("open {}", path.display()))?;
         info!("  → {}", device.name().unwrap_or("<unknown>"));
         let stream = device.into_event_stream()?;
-        Ok(Self { stream })
+        Ok(Self { stream, is_grabbed: false })
     }
 
     pub fn grab(&mut self) -> anyhow::Result<()> {
-        self.stream.device_mut().grab()?;
-        info!("keyboard grabbed");
+        if !self.is_grabbed {
+            self.stream.device_mut().grab()?;
+            self.is_grabbed = true;
+            info!("keyboard grabbed");
+        }
         Ok(())
     }
 
     pub fn ungrab(&mut self) -> anyhow::Result<()> {
-        self.stream.device_mut().ungrab()?;
-        info!("keyboard ungrabbed");
+        if self.is_grabbed {
+            let _ = self.stream.device_mut().ungrab();
+            self.is_grabbed = false;
+            info!("keyboard ungrabbed");
+        }
         Ok(())
     }
 
@@ -134,6 +154,12 @@ impl KeyboardCapture {
                 }
             }
         }
+    }
+}
+
+impl Drop for KeyboardCapture {
+    fn drop(&mut self) {
+        let _ = self.ungrab();
     }
 }
 

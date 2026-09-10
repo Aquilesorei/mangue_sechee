@@ -170,6 +170,7 @@ async fn handle(
     info!("virtual mouse + keyboard ready");
 
     let mut edge = EdgeDetector::new(screen_width, screen_height);
+    let mut has_control = false;
 
     // Outbound channel — ReturnControl, Pong, and broadcast messages go here
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Message>(16);
@@ -199,18 +200,26 @@ async fn handle(
                       edge: &mut EdgeDetector,
                       mouse: &mut MouseInjector,
                       keyboard: &mut KeyboardInjector,
+                      has_control: &mut bool,
                       out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
         match msg {
             Message::EdgeCrossed { edge: entry } => {
                 let return_edge = entry.opposite();
                 edge.set_allowed_edge(Some(return_edge));
                 edge.place_at_entry(&return_edge);
+                *has_control = true;
                 info!("cursor entered from {return_edge:?} (controller exited {entry:?}) — return edge restricted to {return_edge:?}");
             }
 
             Message::InputEvent(event) => {
+                if !*has_control {
+                    // Residual in-flight events after returning control — ignore
+                    return Ok(true);
+                }
+
                 if let InputEvent::MouseMove { dx, dy } = &event {
                     if let Some(exit) = edge.update(*dx, *dy) {
+                        *has_control = false;
                         info!("cursor left via {exit:?} — ReturnControl");
                         // Immediate clipboard sync on returning control to controller
                         if clipboard_enabled {
@@ -223,6 +232,7 @@ async fn handle(
                             }
                         }
                         let _ = out_tx.try_send(Message::ReturnControl { edge: exit });
+                        return Ok(true);
                     }
                 }
                 match &event {
@@ -283,7 +293,7 @@ async fn handle(
 
     // Process initial message if captured during pairing resolution
     if let Some(msg) = initial_msg {
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &out_tx)? {
             return Ok(());
         }
     }
@@ -291,7 +301,7 @@ async fn handle(
     // ── Event loop ────────────────────────────────────────────────────────────
     loop {
         let msg = receiver.receive().await?;
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &out_tx)? {
             break;
         }
     }

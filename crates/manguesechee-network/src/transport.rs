@@ -53,6 +53,7 @@ pub struct TcpTransport {
 
 impl TcpTransport {
     pub fn new(stream: TcpStream) -> Self {
+        let _ = stream.set_nodelay(true);
         Self { stream }
     }
 

@@ -172,15 +172,30 @@ pub async fn connect_to(
                 Err(e) => warn!("mouse {}: {e:#}", path.display()),
                 Ok(mut cap) => loop {
                     tokio::select! {
-                        Ok(_) = grab_rx.changed() => {
-                            let g = *grab_rx.borrow();
-                            if let Err(e) = if g { cap.grab() } else { cap.ungrab() } {
-                                warn!("mouse grab {}: {e}", path.display());
+                        res = grab_rx.changed() => match res {
+                            Ok(_) => {
+                                let g = *grab_rx.borrow();
+                                if let Err(e) = if g { cap.grab() } else { cap.ungrab() } {
+                                    warn!("mouse grab {}: {e}", path.display());
+                                }
                             }
-                        }
+                            Err(_) => {
+                                let _ = cap.ungrab();
+                                break;
+                            }
+                        },
                         ev = cap.next_event() => match ev {
-                            Ok(ev) => { let _ = tx.send(ev).await; }
-                            Err(e) => { warn!("mouse read {}: {e}", path.display()); break; }
+                            Ok(ev) => {
+                                if tx.send(ev).await.is_err() {
+                                    let _ = cap.ungrab();
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = cap.ungrab();
+                                warn!("mouse read {}: {e}", path.display());
+                                break;
+                            }
                         }
                     }
                 },
@@ -196,15 +211,30 @@ pub async fn connect_to(
                 Err(e) => warn!("keyboard {}: {e:#}", path.display()),
                 Ok(mut cap) => loop {
                     tokio::select! {
-                        Ok(_) = grab_rx.changed() => {
-                            let g = *grab_rx.borrow();
-                            if let Err(e) = if g { cap.grab() } else { cap.ungrab() } {
-                                warn!("keyboard grab {}: {e}", path.display());
+                        res = grab_rx.changed() => match res {
+                            Ok(_) => {
+                                let g = *grab_rx.borrow();
+                                if let Err(e) = if g { cap.grab() } else { cap.ungrab() } {
+                                    warn!("keyboard grab {}: {e}", path.display());
+                                }
                             }
-                        }
+                            Err(_) => {
+                                let _ = cap.ungrab();
+                                break;
+                            }
+                        },
                         ev = cap.next_event() => match ev {
-                            Ok(ev) => { let _ = tx.send(ev).await; }
-                            Err(e) => { warn!("keyboard read {}: {e}", path.display()); break; }
+                            Ok(ev) => {
+                                if tx.send(ev).await.is_err() {
+                                    let _ = cap.ungrab();
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = cap.ungrab();
+                                warn!("keyboard read {}: {e}", path.display());
+                                break;
+                            }
                         }
                     }
                 },
@@ -274,6 +304,7 @@ pub async fn connect_to(
                         let _ = manguesechee_core::config::save(&cfg);
                     }
                 }
+                Ok(Message::Pong) => {}
                 Ok(Message::Goodbye) | Err(_) => break,
                 Ok(other) => warn!("unexpected: {other:?}"),
             }
@@ -281,11 +312,29 @@ pub async fn connect_to(
     });
 
     // ── State machine ─────────────────────────────────────────────────────────
+    struct GrabGuard {
+        grab_mouse_tx: tokio::sync::watch::Sender<bool>,
+        grab_keyboard_tx: tokio::sync::watch::Sender<bool>,
+    }
+    impl Drop for GrabGuard {
+        fn drop(&mut self) {
+            let _ = self.grab_mouse_tx.send(false);
+            let _ = self.grab_keyboard_tx.send(false);
+        }
+    }
+    let _grab_guard = GrabGuard {
+        grab_mouse_tx: grab_mouse_tx.clone(),
+        grab_keyboard_tx: grab_keyboard_tx.clone(),
+    };
+
     let mut state = ControllerState::Local;
     let initial_locked = ipc_state.lock().unwrap().cursor_locked;
     let mut edge = EdgeDetector::new(screen_width, screen_height)
         .with_settings(deadzone_px, delay_ms, initial_locked);
     let mut broadcast_rx = broadcast_tx.subscribe();
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     info!("ready — move cursor to screen edge to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms)");
 
     loop {
@@ -321,7 +370,12 @@ pub async fn connect_to(
                                     info!("→ EdgeCrossed ({crossed:?}) matching target {target_edge:?} — grabbing");
                                     let _ = grab_mouse_tx.send(true);
                                     let _ = grab_keyboard_tx.send(true);
-                                    sender.send(&Message::EdgeCrossed { edge: crossed }).await?;
+                                    if let Err(e) = sender.send(&Message::EdgeCrossed { edge: crossed }).await {
+                                        warn!("failed to send EdgeCrossed to {addr}: {e} — ungrabbing");
+                                        let _ = grab_mouse_tx.send(false);
+                                        let _ = grab_keyboard_tx.send(false);
+                                        break;
+                                    }
                                     state = ControllerState::Forwarding;
 
                                     // Immediate clipboard sync on entering peer screen
@@ -339,7 +393,22 @@ pub async fn connect_to(
                         }
                     }
                     ControllerState::Forwarding => {
-                        sender.send(&Message::InputEvent(event)).await?;
+                        if let Err(e) = sender.send(&Message::InputEvent(event)).await {
+                            warn!("failed to send InputEvent to {addr}: {e} — ungrabbing");
+                            let _ = grab_mouse_tx.send(false);
+                            let _ = grab_keyboard_tx.send(false);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Periodic heartbeat ping to keep connection alive and detect dropped peers early
+            _ = ping_interval.tick() => {
+                if state == ControllerState::Local {
+                    if let Err(e) = sender.send(&Message::Ping).await {
+                        warn!("heartbeat ping to {addr} failed: {e} — disconnecting");
+                        break;
                     }
                 }
             }
@@ -362,29 +431,33 @@ pub async fn connect_to(
 
             // Peer returning control
             Some(_) = return_rx.recv() => {
-                info!("← ReturnControl — ungrabbing, back to local");
-                let _ = grab_mouse_tx.send(false);
-                let _ = grab_keyboard_tx.send(false);
-                state = ControllerState::Local;
-                let target_edge = {
-                    let s = ipc_state.lock().unwrap();
-                    let single_peer = s.peers.len() == 1;
-                    s.peers.iter()
-                        .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
-                        .map(|p| match p.position.to_lowercase().as_str() {
-                            "left" => Edge::Left,
-                            "above" | "top" => Edge::Top,
-                            "below" | "bottom" => Edge::Bottom,
-                            _ => Edge::Right,
-                        })
-                        .unwrap_or(Edge::Right)
-                };
-                edge.set_allowed_edge(Some(target_edge));
-                edge.place_at_entry(&target_edge);
+                if state == ControllerState::Forwarding {
+                    info!("← ReturnControl — ungrabbing, back to local");
+                    let _ = grab_mouse_tx.send(false);
+                    let _ = grab_keyboard_tx.send(false);
+                    state = ControllerState::Local;
+                    let target_edge = {
+                        let s = ipc_state.lock().unwrap();
+                        let single_peer = s.peers.len() == 1;
+                        s.peers.iter()
+                            .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
+                            .map(|p| match p.position.to_lowercase().as_str() {
+                                "left" => Edge::Left,
+                                "above" | "top" => Edge::Top,
+                                "below" | "bottom" => Edge::Bottom,
+                                _ => Edge::Right,
+                            })
+                            .unwrap_or(Edge::Right)
+                    };
+                    edge.set_allowed_edge(Some(target_edge));
+                    edge.place_at_entry(&target_edge);
+                }
             }
         }
     }
 
-    sender.send(&Message::Goodbye).await?;
+    let _ = grab_mouse_tx.send(false);
+    let _ = grab_keyboard_tx.send(false);
+    let _ = sender.send(&Message::Goodbye).await;
     Ok(())
 }
