@@ -25,6 +25,7 @@ export component MainWindow inherits Window {
     in-out property <int>         active-tab:         0; // 0=Peers, 1=Topology, 2=Settings, 3=Logs
     in-out property <int>         wizard-page:        0;
     in-out property <string>      local-name:         "fedora";
+    in-out property <string>      local-ip:           "127.0.0.1";
     in-out property <string>      status:             "Ready";
     in-out property <bool>        is-service-running: true;
     in-out property <string>      role-label:         "Server + Client (Both)";
@@ -212,15 +213,20 @@ export component MainWindow inherits Window {
 
                 Rectangle { vertical-stretch: 1; }
 
-                // Sidebar Footer: Local Identity & Daemon Pill
+                // Sidebar Footer: Local Identity, IP & Daemon Pill
                 Rectangle {
-                    background: #11121c; border-radius: 8px; height: 60px;
+                    background: #11121c; border-radius: 8px; height: 74px;
                     VerticalBox {
-                        padding: 8px; spacing: 4px;
+                        padding: 8px; spacing: 3px;
                         HorizontalBox {
                             Text { text: "Device:"; font-size: 11px; color: #72748a; }
                             Rectangle { horizontal-stretch: 1; }
                             Text { text: root.local-name; font-size: 12px; font-weight: 600; color: #e0e0ff; overflow: elide; }
+                        }
+                        HorizontalBox {
+                            Text { text: "LAN IP:"; font-size: 11px; color: #72748a; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #818cf8; overflow: elide; }
                         }
                         HorizontalBox {
                             spacing: 6px;
@@ -314,19 +320,19 @@ export component MainWindow inherits Window {
                             VerticalBox {
                                 spacing: 2px;
                                 Text { text: "Active Role:"; font-size: 11px; color: #72748a; }
-                                Text { text: root.role-label; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                                Text { text: root.role-label; font-size: 13px; font-weight: 600; color: #e0e0ff; }
                             }
                             Rectangle { width: 1px; background: #2b2d42; }
                             VerticalBox {
                                 spacing: 2px;
-                                Text { text: "Listening Port:"; font-size: 11px; color: #72748a; }
-                                Text { text: "TCP " + root.setting-port; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                                Text { text: "This Machine Address:"; font-size: 11px; color: #72748a; }
+                                Text { text: root.local-ip + ":" + root.setting-port; font-size: 13px; font-weight: 700; color: #38ef7d; }
                             }
                             Rectangle { width: 1px; background: #2b2d42; }
                             VerticalBox {
                                 spacing: 2px;
                                 Text { text: "Auto-Discovery:"; font-size: 11px; color: #72748a; }
-                                Text { text: root.discovery ? "mDNS Active" : "Disabled"; font-size: 14px; font-weight: 600; color: root.discovery ? #38ef7d : #f59e0b; }
+                                Text { text: root.discovery ? "mDNS Active" : "Disabled"; font-size: 13px; font-weight: 600; color: root.discovery ? #38ef7d : #f59e0b; }
                             }
                             Rectangle { horizontal-stretch: 1; }
                         }
@@ -448,12 +454,12 @@ export component MainWindow inherits Window {
 
                                 // Central Screen (This Machine)
                                 Rectangle {
-                                    width: 180px; height: 95px; border-radius: 8px;
+                                    width: 190px; height: 100px; border-radius: 8px;
                                     background: #4f46e5; border-width: 2px; border-color: #818cf8;
                                     VerticalBox {
-                                        alignment: center; spacing: 4px;
+                                        alignment: center; spacing: 3px;
                                         Text { text: "🖥️ " + root.local-name; font-size: 14px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
-                                        Text { text: "(This Machine)"; font-size: 11px; color: #c7d2fe; horizontal-alignment: center; }
+                                        Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #a5b4fc; horizontal-alignment: center; }
                                         Text { text: root.setting-width + "×" + root.setting-height; font-size: 11px; color: #e0e7ff; horizontal-alignment: center; }
                                     }
                                 }

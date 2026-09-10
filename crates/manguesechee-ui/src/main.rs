@@ -311,6 +311,7 @@ fn main() -> anyhow::Result<()> {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
+    w.set_local_ip(detect_local_ip().into());
     w.set_local_name(cfg.device.name.clone().into());
     w.set_setting_name(cfg.device.name.clone().into());
     w.set_setting_port(cfg.network.port.to_string().into());
@@ -335,6 +336,27 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     } else {
         w.set_setting_peer_pos("right".into());
     }
+}
+
+fn detect_local_ip() -> String {
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip();
+                if !ip.is_loopback() {
+                    return ip.to_string();
+                }
+            }
+        }
+    }
+    let out = Command::new("hostname").arg("-I").output();
+    if let Ok(o) = out {
+        let s = String::from_utf8_lossy(&o.stdout);
+        if let Some(first_ip) = s.split_whitespace().next() {
+            return first_ip.to_string();
+        }
+    }
+    "127.0.0.1".to_string()
 }
 
 fn is_service_active() -> bool {

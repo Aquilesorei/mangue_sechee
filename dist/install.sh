@@ -36,10 +36,21 @@ resolve_format() {
 
 resolve_format
 
+# ── Check for Existing Installation ──────────────────────────────────────────
+
+if [[ "${1:-}" == "--update" ]] || [[ "$FORMAT" == "auto" && -f /usr/bin/manguesechee-agent && -f /usr/bin/manguesechee-ui && "${1:-}" != "--force" ]]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " Existing Manguesechee installation detected."
+    echo " Running fast update (updating binaries & restarting service)…"
+    echo " (Use --force to perform a full clean reinstall from package)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    exec "$DIST_DIR/update.sh"
+fi
+
 # ── Check we're running as root (needed for package install) ──────────────────
 
 if [[ "$EUID" -ne 0 ]]; then
-  echo "error: install.sh must be run with sudo."
+  echo "error: install.sh must be run with sudo for initial system installation."
   echo "  sudo ./dist/install.sh"
   exit 1
 fi
