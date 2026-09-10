@@ -8,26 +8,30 @@ use anyhow::Context;
 use evdev::{AbsoluteAxisType, InputEventKind, Key, PropType, RelativeAxisType};
 use manguesechee_core::events::{InputEvent, KeyCode, MouseButton};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tracing::info;
 
 // ── MouseCapture ──────────────────────────────────────────────────────────────
 
 pub struct MouseCapture {
-    stream:           evdev::EventStream,
-    pending_dx:       i32,
-    pending_dy:       i32,
-    pending_scroll_x: f32,
-    pending_scroll_y: f32,
-    is_grabbed:       bool,
+    stream:               evdev::EventStream,
+    pending_dx:           i32,
+    pending_dy:           i32,
+    pending_scroll_x:     f32,
+    pending_scroll_y:     f32,
+    is_grabbed:           bool,
 
     // Touchpad (pavé tactile) tracking state
-    touch_active:     bool,
-    finger_count:     u8,
-    active_slot:      usize,
-    cur_x:            Option<i32>,
-    cur_y:            Option<i32>,
-    last_x:           Option<i32>,
-    last_y:           Option<i32>,
+    is_touchpad:          bool,
+    touch_active:         bool,
+    pending_ungrab:       bool,
+    pending_ungrab_since: Option<Instant>,
+    finger_count:         u8,
+    active_slot:          usize,
+    cur_x:                Option<i32>,
+    cur_y:                Option<i32>,
+    last_x:               Option<i32>,
+    last_y:               Option<i32>,
 }
 
 impl MouseCapture {
@@ -36,6 +40,7 @@ impl MouseCapture {
         let device = evdev::Device::open(path)
             .with_context(|| format!("open {}", path.display()))?;
         info!("  → {}", device.name().unwrap_or("<unknown>"));
+        let is_touchpad = is_touchpad_device(&device);
         let stream = device.into_event_stream()?;
         Ok(Self {
             stream,
@@ -44,7 +49,10 @@ impl MouseCapture {
             pending_scroll_x: 0.0,
             pending_scroll_y: 0.0,
             is_grabbed: false,
+            is_touchpad,
             touch_active: false,
+            pending_ungrab: false,
+            pending_ungrab_since: None,
             finger_count: 0,
             active_slot: 0,
             cur_x: None,
@@ -56,6 +64,8 @@ impl MouseCapture {
 
     /// Exclusively grab the device — local compositor stops seeing events.
     pub fn grab(&mut self) -> anyhow::Result<()> {
+        self.pending_ungrab = false;
+        self.pending_ungrab_since = None;
         if !self.is_grabbed {
             self.stream.device_mut().grab()?;
             self.is_grabbed = true;
@@ -65,17 +75,40 @@ impl MouseCapture {
     }
 
     /// Release the exclusive grab — local compositor sees events again.
+    /// For touchpads, if a touch is actively in progress, we defer ungrabbing
+    /// until the finger is lifted to prevent sending an orphan touch-up event to KWin/libinput,
+    /// which would cause a "double tracking ID -1" bug and disable the device.
     pub fn ungrab(&mut self) -> anyhow::Result<()> {
         if self.is_grabbed {
-            let _ = self.stream.device_mut().ungrab();
-            self.is_grabbed = false;
-            info!("pointer/touchpad ungrabbed");
+            if self.is_touchpad && self.touch_active {
+                self.pending_ungrab = true;
+                self.pending_ungrab_since = Some(Instant::now());
+                info!("touchpad ungrab deferred until finger liftoff");
+            } else {
+                let _ = self.stream.device_mut().ungrab();
+                self.is_grabbed = false;
+                self.pending_ungrab = false;
+                self.pending_ungrab_since = None;
+                info!("pointer/touchpad ungrabbed");
+            }
         }
         Ok(())
     }
 
     pub async fn next_event(&mut self) -> anyhow::Result<InputEvent> {
         loop {
+            // Check if deferred ungrab timed out even if no new hardware events arrive
+            if self.pending_ungrab {
+                let timed_out = self.pending_ungrab_since.map_or(false, |t| t.elapsed() > Duration::from_millis(250));
+                if !self.touch_active || timed_out {
+                    let _ = self.stream.device_mut().ungrab();
+                    self.is_grabbed = false;
+                    self.pending_ungrab = false;
+                    self.pending_ungrab_since = None;
+                    info!("deferred touchpad ungrab executed (touch_active={}, timed_out={})", self.touch_active, timed_out);
+                }
+            }
+
             // Flush any pending scroll events
             if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
                 let sx = if self.pending_scroll_x.abs() >= 1.0 {
@@ -109,6 +142,15 @@ impl MouseCapture {
             let ev = self.stream.next_event().await?;
             match ev.kind() {
                 InputEventKind::Synchronization(_) => {
+                    // Check if deferred ungrab is pending and finger is lifted
+                    if self.pending_ungrab && !self.touch_active {
+                        let _ = self.stream.device_mut().ungrab();
+                        self.is_grabbed = false;
+                        self.pending_ungrab = false;
+                        self.pending_ungrab_since = None;
+                        info!("deferred touchpad ungrab executed upon finger release");
+                    }
+
                     // Compute touchpad movement / scroll deltas
                     if self.touch_active {
                         if let (Some(cx), Some(cy)) = (self.cur_x, self.cur_y) {
@@ -125,8 +167,15 @@ impl MouseCapture {
                                         self.pending_scroll_x -= (dx as f32) / 16.0;
                                     } else {
                                         // Single-finger: pointer movement
-                                        self.pending_dx += dx;
-                                        self.pending_dy += dy;
+                                        // Raw touchpad units are ~12 counts/mm (~300 DPI) vs standard mouse (1200-1600 DPI).
+                                        // Scale by 2.5x to match screen resolution and allow smooth edge crossings.
+                                        let (scaled_dx, scaled_dy) = if self.is_touchpad {
+                                            ((dx as f32 * 2.5).round() as i32, (dy as f32 * 2.5).round() as i32)
+                                        } else {
+                                            (dx, dy)
+                                        };
+                                        self.pending_dx += scaled_dx;
+                                        self.pending_dy += scaled_dy;
                                     }
                                 }
                             }
@@ -405,6 +454,21 @@ fn is_ignored_device(name: &str) -> bool {
         || lower.contains("headphone")
         || lower.contains("mic")
         || lower.contains("speaker")
+        || lower.contains("elan2513")
+}
+
+pub fn is_touchpad_device(device: &evdev::Device) -> bool {
+    let name = device.name().unwrap_or("<unknown>");
+    let lower = name.to_lowercase();
+    let has_abs = device
+        .supported_absolute_axes()
+        .map(|a| a.contains(AbsoluteAxisType::ABS_X) || a.contains(AbsoluteAxisType::ABS_MT_POSITION_X))
+        .unwrap_or(false);
+    let has_touch_keys = device
+        .supported_keys()
+        .map(|k| k.contains(Key::BTN_TOOL_FINGER) || k.contains(Key::BTN_TOUCH))
+        .unwrap_or(false);
+    has_abs && has_touch_keys && (lower.contains("touchpad") || lower.contains("trackpad") || lower.contains("glidepoint"))
 }
 
 fn sorted_event_entries() -> anyhow::Result<Vec<std::fs::DirEntry>> {
@@ -483,16 +547,29 @@ pub fn find_all_mice() -> Vec<PathBuf> {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
-    let mut mice = Vec::new();
+    let mut discovered: Vec<(PathBuf, String)> = Vec::new();
     for entry in entries {
         let path = entry.path();
         if let Ok(device) = evdev::Device::open(&path) {
-            let name = device.name().unwrap_or("<unknown>");
+            let name = device.name().unwrap_or("<unknown>").to_string();
             if is_mouse_or_touchpad(&device) {
-                info!("found pointer/touchpad: {} ({})", path.display(), name);
-                mice.push(path);
+                discovered.push((path, name));
             }
         }
+    }
+
+    // Deduplicate companion devices: if we have a dedicated Touchpad node (e.g. "SYNA... Touchpad"),
+    // discard the legacy/dummy companion Mouse node ("SYNA... Mouse").
+    let has_touchpad = discovered.iter().any(|(_, name)| name.to_lowercase().contains("touchpad"));
+    let mut mice = Vec::new();
+    for (path, name) in discovered {
+        let lower = name.to_lowercase();
+        if has_touchpad && !lower.contains("touchpad") && (lower.contains("syna") || lower.contains("alps")) {
+            info!("skipping duplicate companion pointer: {} ({})", path.display(), name);
+            continue;
+        }
+        info!("found pointer/touchpad: {} ({})", path.display(), name);
+        mice.push(path);
     }
     mice
 }
