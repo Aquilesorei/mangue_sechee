@@ -16,46 +16,219 @@ fn main() -> anyhow::Result<()> {
         window.set_view(AppView::Wizard);
     } else {
         window.set_view(AppView::Connecting);
-        window.set_status("Starting agent…".into());
-        if let Ok(cfg) = config::load() {
-            window.set_local_name(cfg.device.name.clone().into());
-            window.set_discovery(cfg.network.discovery);
-        }
+        window.set_status("Connecting to agent…".into());
         ensure_agent_running();
-        window.set_status("Ready".into());
+        let running = is_service_active();
+        window.set_is_service_running(running);
+        window.set_status(if running { "Ready".into() } else { "Service Stopped".into() });
         window.set_view(AppView::Main);
     }
 
-    // Wizard finish
+    // Populate UI from current config
+    if let Ok(cfg) = config::load() {
+        populate_settings_from_config(&window, &cfg);
+    }
+
+    // ── Service Controls (Start, Stop, Restart) ──────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_start_service(move || {
+            let Some(w) = w.upgrade() else { return };
+            info!("starting agent service");
+            let _ = Command::new("systemctl")
+                .args(["--user", "start", "manguesechee-agent"])
+                .status();
+            ensure_agent_running();
+            w.set_is_service_running(true);
+            w.set_status("Running".into());
+            w.set_settings_feedback("✓ Agent daemon started".into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_stop_service(move || {
+            let Some(w) = w.upgrade() else { return };
+            info!("stopping agent service");
+            let _ = Command::new("systemctl")
+                .args(["--user", "stop", "manguesechee-agent"])
+                .status();
+            send_ipc(ipc::GuiCommand::Shutdown);
+            w.set_is_service_running(false);
+            w.set_status("Service Stopped".into());
+            w.set_settings_feedback("✓ Agent daemon stopped".into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_restart_service(move || {
+            let Some(w) = w.upgrade() else { return };
+            info!("restarting agent service");
+            w.set_status("Restarting…".into());
+            let _ = Command::new("systemctl")
+                .args(["--user", "restart", "manguesechee-agent"])
+                .status();
+            w.set_is_service_running(true);
+            w.set_settings_feedback("✓ Agent daemon restarted".into());
+        });
+    }
+
+    // ── Setup Wizard Finish ──────────────────────────────────────────────────
     {
         let w = window.as_weak();
         window.on_wizard_finish(move |role, peer_addr, side| {
-            let w = w.upgrade().unwrap();
+            let Some(w) = w.upgrade() else { return };
             w.set_status("Saving configuration…".into());
-            let mut cfg = config::Config::default();
-            if !peer_addr.is_empty() {
+
+            let mut cfg = config::load().unwrap_or_default();
+            // Role: 0=Both, 1=Controller only, 2=Peer only
+            cfg.input.enabled = role != 2;
+
+            if !peer_addr.trim().is_empty() {
+                cfg.peers.clear();
                 cfg.peers.push(config::PeerConfig {
-                    id:       "peer".to_string(),
-                    address:  Some(peer_addr.to_string()),
-                    position: side.to_string(),
+                    id:       "primary-peer".to_string(),
+                    address:  Some(peer_addr.trim().to_string()),
+                    position: side.trim().to_lowercase(),
                 });
             }
+
             if let Err(e) = config::save(&cfg) {
                 w.set_status(format!("Config error: {e}").into());
                 return;
             }
+
             w.set_status("Starting agent…".into());
             ensure_agent_running();
             enable_autostart();
-            w.set_local_name(cfg.device.name.clone().into());
-            w.set_discovery(cfg.network.discovery);
+
+            populate_settings_from_config(&w, &cfg);
+            w.set_is_service_running(true);
             w.set_status("Ready".into());
             w.set_view(AppView::Main);
-            let _ = role; // role stored in config via input.enabled — expand later
         });
     }
 
-    // Connect
+    // ── Settings Save ────────────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_save_settings(move || {
+            let Some(w) = w.upgrade() else { return };
+            let mut cfg = config::load().unwrap_or_default();
+
+            // Device Name
+            let dev_name = w.get_setting_name().trim().to_string();
+            if !dev_name.is_empty() {
+                cfg.device.name = dev_name.clone();
+                w.set_local_name(dev_name.into());
+            }
+
+            // Role: 0=Both, 1=Controller, 2=Peer
+            let role_idx = w.get_setting_role();
+            cfg.input.enabled = role_idx != 2;
+
+            // Network Port
+            if let Ok(port) = w.get_setting_port().trim().parse::<u16>() {
+                cfg.network.port = port;
+            }
+
+            // Discovery & Clipboard
+            cfg.network.discovery = w.get_setting_discovery();
+            cfg.clipboard.enabled = w.get_setting_clipboard();
+
+            // Screen Dimensions
+            if let Ok(width) = w.get_setting_width().trim().parse::<u32>() {
+                cfg.screen.width = width;
+            }
+            if let Ok(height) = w.get_setting_height().trim().parse::<u32>() {
+                cfg.screen.height = height;
+            }
+
+            // Peer Config
+            let peer_ip = w.get_setting_peer_addr().trim().to_string();
+            let peer_pos = w.get_setting_peer_pos().trim().to_lowercase();
+            if !peer_ip.is_empty() {
+                cfg.peers.clear();
+                cfg.peers.push(config::PeerConfig {
+                    id: "primary-peer".to_string(),
+                    address: Some(peer_ip),
+                    position: peer_pos,
+                });
+            }
+
+            match config::save(&cfg) {
+                Ok(_) => {
+                    info!("configuration saved");
+                    w.set_settings_feedback("✓ Settings saved! Restarting agent service…".into());
+                    restart_agent_service();
+                    populate_settings_from_config(&w, &cfg);
+                }
+                Err(e) => {
+                    warn!("failed to save config: {e}");
+                    w.set_settings_feedback(format!("Error: {e}").into());
+                }
+            }
+        });
+    }
+
+    // ── Topology Save ────────────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_save_topology(move |pos| {
+            let Some(w) = w.upgrade() else { return };
+            let pos_clean = pos.trim().to_lowercase();
+            let mut cfg = config::load().unwrap_or_default();
+
+            if cfg.peers.is_empty() {
+                cfg.peers.push(config::PeerConfig {
+                    id: "primary-peer".to_string(),
+                    address: None,
+                    position: pos_clean.clone(),
+                });
+            } else {
+                for p in &mut cfg.peers {
+                    p.position = pos_clean.clone();
+                }
+            }
+
+            if let Ok(_) = config::save(&cfg) {
+                w.set_setting_peer_pos(pos_clean.clone().into());
+                w.set_settings_feedback(format!("✓ Topology updated: Peer positioned on the {pos_clean}").into());
+                restart_agent_service();
+            }
+        });
+    }
+
+    // ── Auto-Detect Screen Geometry ──────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_auto_detect_screen(move || {
+            let Some(w) = w.upgrade() else { return };
+            let (width, height) = manguesechee_input::detect_screen_size();
+            w.set_setting_width(width.to_string().into());
+            w.set_setting_height(height.to_string().into());
+            w.set_settings_feedback(format!("✓ Auto-detected screen geometry: {width}×{height}").into());
+        });
+    }
+
+    // ── Logs Console ─────────────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_refresh_logs(move || {
+            let Some(w) = w.upgrade() else { return };
+            let logs = fetch_journal_logs();
+            let slint_logs: Vec<slint::SharedString> = logs.into_iter().map(Into::into).collect();
+            w.set_log_lines(slint_logs.as_slice().into());
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_clear_logs(move || {
+            let Some(w) = w.upgrade() else { return };
+            w.set_log_lines((&[] as &[slint::SharedString]).into());
+        });
+    }
+
+    // ── Connect & Disconnect IPC ─────────────────────────────────────────────
     {
         let w = window.as_weak();
         window.on_connect_requested(move |addr| {
@@ -65,22 +238,20 @@ fn main() -> anyhow::Result<()> {
             }
         });
     }
-
-    // Disconnect
     {
         let w = window.as_weak();
         window.on_disconnect_requested(move || {
             send_ipc(ipc::GuiCommand::Disconnect);
-            if let Some(w) = w.upgrade() { w.set_status("Disconnected".into()); }
+            if let Some(w) = w.upgrade() {
+                w.set_status("Disconnected".into());
+            }
         });
     }
-
-    // Discovery toggle
     window.on_toggle_discovery(move |enabled| {
         send_ipc(ipc::GuiCommand::SetDiscovery { enabled });
     });
 
-    // Poll status every 2 s
+    // ── Background Polling Timer (Every 2s) ──────────────────────────────────
     let _poll_timer = {
         let w = window.as_weak();
         let timer = slint::Timer::default();
@@ -90,6 +261,16 @@ fn main() -> anyhow::Result<()> {
             move || {
                 let Some(w) = w.upgrade() else { return };
                 if w.get_view() != AppView::Main { return; }
+
+                let service_running = is_service_active();
+                w.set_is_service_running(service_running);
+
+                if !service_running {
+                    w.set_status("Service Stopped".into());
+                    return;
+                }
+
+                // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
                     local_name, connected_to, discovery, peers,
                 }) = poll_status()
@@ -100,13 +281,23 @@ fn main() -> anyhow::Result<()> {
                         Some(p) => format!("Forwarding → {p}").into(),
                         None    => "Ready".into(),
                     });
+
+                    let default_pos = w.get_setting_peer_pos().to_string();
                     let entries: Vec<PeerEntry> = peers.iter().map(|p| PeerEntry {
                         name:      p.name.clone().into(),
                         address:   p.address.clone().into(),
                         paired:    p.paired,
                         connected: p.connected,
+                        position:  default_pos.clone().into(),
                     }).collect();
                     w.set_peers(entries.as_slice().into());
+                }
+
+                // If currently on the logs tab, auto-refresh logs
+                if w.get_active_tab() == 3 {
+                    let logs = fetch_journal_logs();
+                    let slint_logs: Vec<slint::SharedString> = logs.into_iter().map(Into::into).collect();
+                    w.set_log_lines(slint_logs.as_slice().into());
                 }
             },
         );
@@ -117,14 +308,84 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
+    w.set_local_name(cfg.device.name.clone().into());
+    w.set_setting_name(cfg.device.name.clone().into());
+    w.set_setting_port(cfg.network.port.to_string().into());
+    w.set_setting_discovery(cfg.network.discovery);
+    w.set_setting_clipboard(cfg.clipboard.enabled);
+    w.set_setting_width(cfg.screen.width.to_string().into());
+    w.set_setting_height(cfg.screen.height.to_string().into());
+
+    // Role: 0=Both, 1=Controller, 2=Peer
+    let role = if !cfg.input.enabled {
+        w.set_role_label("Peer only (Server - receives input)".into());
+        2
+    } else {
+        w.set_role_label("Server + Client (Bidirectional)".into());
+        0
+    };
+    w.set_setting_role(role);
+
+    if let Some(p) = cfg.peers.first() {
+        w.set_setting_peer_addr(p.address.clone().unwrap_or_default().into());
+        w.set_setting_peer_pos(p.position.clone().into());
+    } else {
+        w.set_setting_peer_pos("right".into());
+    }
+}
+
+fn is_service_active() -> bool {
+    let out = Command::new("systemctl")
+        .args(["--user", "is-active", "manguesechee-agent"])
+        .output();
+    if let Ok(o) = out {
+        if String::from_utf8_lossy(&o.stdout).trim() == "active" {
+            return true;
+        }
+    }
+    agent_alive()
+}
+
+fn fetch_journal_logs() -> Vec<String> {
+    let output = Command::new("journalctl")
+        .args(["--user", "-u", "manguesechee-agent", "-n", "50", "--no-pager", "-o", "short-iso"])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.to_string())
+                .collect()
+        }
+        _ => vec!["[Notice] No journalctl entries available for manguesechee-agent.".into()],
+    }
+}
+
+fn restart_agent_service() {
+    let _ = Command::new("systemctl")
+        .args(["--user", "restart", "manguesechee-agent"])
+        .spawn();
+}
+
 fn ensure_agent_running() {
-    if agent_alive() { info!("agent already running"); return; }
+    if is_service_active() { return; }
+    let _ = Command::new("systemctl")
+        .args(["--user", "start", "manguesechee-agent"])
+        .status();
+    if agent_alive() { return; }
+
     let bin = std::env::current_exe().ok()
         .and_then(|p| p.parent().map(|d| d.join("manguesechee-agent")))
         .filter(|p| p.exists())
         .unwrap_or_else(|| PathBuf::from("manguesechee-agent"));
+
     match Command::new(&bin).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-        Ok(_)  => { info!("agent spawned"); std::thread::sleep(std::time::Duration::from_millis(800)); }
+        Ok(_)  => { std::thread::sleep(std::time::Duration::from_millis(600)); }
         Err(e) => warn!("spawn failed: {e}"),
     }
 }
@@ -138,7 +399,9 @@ fn agent_alive() -> bool {
 fn send_ipc(cmd: ipc::GuiCommand) {
     use std::io::Write;
     if let Ok(mut s) = std::os::unix::net::UnixStream::connect(ipc::socket_path()) {
-        if let Ok(j) = serde_json::to_string(&cmd) { let _ = s.write_all(format!("{j}\n").as_bytes()); }
+        if let Ok(j) = serde_json::to_string(&cmd) {
+            let _ = s.write_all(format!("{j}\n").as_bytes());
+        }
     }
 }
 
@@ -147,12 +410,13 @@ fn poll_status() -> Option<ipc::AgentEvent> {
     let s = std::os::unix::net::UnixStream::connect(ipc::socket_path()).ok()?;
     s.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok()?;
     let mut w = s.try_clone().ok()?;
-    w.write_all(format!("{j}\n", j = serde_json::to_string(&ipc::GuiCommand::GetStatus).ok()?).as_bytes()).ok()?;
+    let cmd_json = serde_json::to_string(&ipc::GuiCommand::GetStatus).ok()?;
+    w.write_all(format!("{cmd_json}\n").as_bytes()).ok()?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).ok()?;
     serde_json::from_str(&line).ok()
 }
 
 fn enable_autostart() {
-    let _ = Command::new("systemctl").args(["--user","enable","--now","manguesechee-agent"]).status();
+    let _ = Command::new("systemctl").args(["--user", "enable", "--now", "manguesechee-agent"]).status();
 }

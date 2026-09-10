@@ -1,11 +1,12 @@
 import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit,
-         Switch, ComboBox, ProgressIndicator } from "std-widgets.slint";
+         Switch, ComboBox, ProgressIndicator, ScrollView } from "std-widgets.slint";
 
 export struct PeerEntry {
     name:      string,
     address:   string,
     paired:    bool,
     connected: bool,
+    position:  string,
 }
 
 export enum AppView { Wizard, Connecting, Main }
@@ -13,163 +14,634 @@ export enum AppView { Wizard, Connecting, Main }
 export component MainWindow inherits Window {
     title: "Manguesechee";
     icon:  @image-url("../../../assets/icons/manguesechee-256.png");
-    min-width:  640px;
-    min-height: 480px;
-    background: #1a1a2e;
+    min-width:  840px;
+    min-height: 590px;
+    preferred-width: 880px;
+    preferred-height: 620px;
+    background: #11121c;
 
-    in-out property <AppView>     view:         AppView.Wizard;
-    in-out property <int>         wizard-page:  0;
-    in-out property <string>      local-name:   "unknown";
-    in-out property <string>      status:       "Starting…";
-    in-out property <bool>        discovery:    true;
-    in-out property <[PeerEntry]> peers:        [];
-    in-out property <int>         role:         0;
-    in-out property <string>      peer-address: "";
-    in-out property <string>      peer-side:    "right";
+    // ── Application State ───────────────────────────────────────────────────
+    in-out property <AppView>     view:               AppView.Main;
+    in-out property <int>         active-tab:         0; // 0=Peers, 1=Topology, 2=Settings, 3=Logs
+    in-out property <int>         wizard-page:        0;
+    in-out property <string>      local-name:         "fedora";
+    in-out property <string>      status:             "Ready";
+    in-out property <bool>        is-service-running: true;
+    in-out property <string>      role-label:         "Server + Client (Both)";
+    in-out property <bool>        discovery:          true;
+    in-out property <[PeerEntry]> peers:              [];
+    in-out property <[string]>    log-lines:          [];
 
-    callback wizard-finish(int, string, string);
+    // ── Wizard Properties ───────────────────────────────────────────────────
+    in-out property <int>         wizard-role:  0;
+    in-out property <string>      wizard-addr:  "";
+    in-out property <string>      wizard-side:  "right";
+
+    // ── Settings Properties ─────────────────────────────────────────────────
+    in-out property <string>      setting-name:       "fedora";
+    in-out property <int>         setting-role:       0; // 0=Both, 1=Controller, 2=Peer
+    in-out property <string>      setting-port:       "24800";
+    in-out property <bool>        setting-discovery:  true;
+    in-out property <bool>        setting-clipboard:  true;
+    in-out property <string>      setting-width:      "1920";
+    in-out property <string>      setting-height:     "1080";
+    in-out property <string>      setting-peer-addr:  "";
+    in-out property <string>      setting-peer-pos:   "right";
+    in-out property <string>      settings-feedback:  "";
+
+    // ── Callbacks ───────────────────────────────────────────────────────────
+    callback tab-selected(int);
     callback connect-requested(string);
     callback disconnect-requested();
     callback toggle-discovery(bool);
+    callback save-settings();
+    callback auto-detect-screen();
+    callback save-topology(string);
+    callback refresh-logs();
+    callback clear-logs();
+    callback start-service();
+    callback stop-service();
+    callback restart-service();
+    callback wizard-finish(int, string, string);
 
-    // ── Wizard ────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    // 1. SETUP WIZARD (First Launch)
+    // ═════════════════════════════════════════════════════════════════════════
     if view == AppView.Wizard : VerticalBox {
-        padding: 40px; spacing: 24px;
+        padding: 40px; spacing: 20px;
+        alignment: center;
 
         Text {
-            text: "Welcome to Manguesechee"; font-size: 26px;
-            color: #e0e0ff; font-weight: 700; horizontal-alignment: center;
+            text: "Welcome to Manguesechee";
+            font-size: 26px; font-weight: 700; color: #e0e0ff;
+            horizontal-alignment: center;
         }
         Text {
-            text: "Control multiple Linux machines with one keyboard and mouse.";
-            font-size: 14px; color: #888; wrap: word-wrap; horizontal-alignment: center;
+            text: "Control multiple Linux machines seamlessly with one mouse and keyboard.";
+            font-size: 14px; color: #8e90a6; wrap: word-wrap;
+            horizontal-alignment: center;
         }
 
         if wizard-page == 0 : VerticalBox {
             spacing: 16px;
-            Text { text: "What is this machine?"; color: #aaf; font-size: 16px; }
+            Text { text: "Machine Role:"; color: #b4b7d6; font-size: 15px; font-weight: 600; }
             ComboBox {
-                model: ["Controller + Peer (both roles)",
-                        "Controller only (sends input)",
-                        "Peer only (receives input)"];
-                current-index: root.role;
-                selected => { root.role = self.current-index; }
+                model: ["Controller + Peer (Bidirectional - Recommended)",
+                        "Controller only (Sends mouse/keyboard to peers)",
+                        "Peer only (Receives input from another computer)"];
+                current-index: root.wizard-role;
+                selected => { root.wizard-role = self.current-index; }
             }
             HorizontalBox {
                 Rectangle { horizontal-stretch: 1; }
-                Button { text: "Next →"; primary: true;
-                         clicked => { root.wizard-page = 1; } }
+                Button {
+                    text: "Next →"; primary: true;
+                    clicked => { root.wizard-page = 1; }
+                }
             }
         }
 
         if wizard-page == 1 : VerticalBox {
-            spacing: 16px;
-            Text { text: "Peer machine"; color: #aaf; font-size: 16px; }
+            spacing: 14px;
+            Text { text: "Connect to Peer:"; color: #b4b7d6; font-size: 15px; font-weight: 600; }
             Text {
-                text: "IP address of the other machine. Leave blank for mDNS auto-discovery.";
-                color: #888; font-size: 13px; wrap: word-wrap;
+                text: "Enter the IP:port of the other machine, or leave blank to rely on auto-discovery:";
+                color: #8e90a6; font-size: 13px;
             }
             LineEdit {
                 placeholder-text: "192.168.1.x:24800";
-                text <=> root.peer-address;
+                text <=> root.wizard-addr;
             }
-            Text { text: "Which side is the peer screen on?"; color: #aaf; font-size: 14px; }
+            Text { text: "Where is the peer machine placed?"; color: #b4b7d6; font-size: 14px; font-weight: 600; }
             ComboBox {
                 model: ["Right", "Left", "Above", "Below"];
-                selected => { root.peer-side = self.current-value.to-lowercase(); }
+                selected => { root.wizard-side = self.current-value.to-lowercase(); }
             }
             HorizontalBox {
-                spacing: 8px;
+                spacing: 10px;
                 Button { text: "← Back"; clicked => { root.wizard-page = 0; } }
                 Rectangle { horizontal-stretch: 1; }
                 Button {
-                    text: "Connect";
-                    primary: true;
+                    text: "Finish Setup & Connect"; primary: true;
                     clicked => {
                         root.view = AppView.Connecting;
-                        root.wizard-finish(root.role, root.peer-address, root.peer-side);
+                        root.wizard-finish(root.wizard-role, root.wizard-addr, root.wizard-side);
                     }
                 }
             }
         }
     }
 
-    // ── Connecting ────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    // 2. CONNECTING SPINNER
+    // ═════════════════════════════════════════════════════════════════════════
     if view == AppView.Connecting : VerticalBox {
-        padding: 60px; spacing: 24px; alignment: center;
-        Text { text: "Starting Manguesechee…"; font-size: 20px;
-               color: #e0e0ff; horizontal-alignment: center; }
+        padding: 60px; spacing: 20px; alignment: center;
+        Text { text: "Connecting to Manguesechee Agent…"; font-size: 22px; color: #e0e0ff; horizontal-alignment: center; }
         ProgressIndicator { indeterminate: true; }
-        Text { text: root.status; color: #888; font-size: 13px;
-               horizontal-alignment: center; }
+        Text { text: root.status; font-size: 13px; color: #8e90a6; horizontal-alignment: center; }
     }
 
-    // ── Main view ─────────────────────────────────────────────────────────
-    if view == AppView.Main : VerticalBox {
-        padding: 16px; spacing: 12px;
+    // ═════════════════════════════════════════════════════════════════════════
+    // 3. MAIN TABBED INTERFACE
+    // ═════════════════════════════════════════════════════════════════════════
+    if view == AppView.Main : HorizontalBox {
+        padding: 0px; spacing: 0px;
 
-        HorizontalBox {
-            spacing: 12px;
-            Text { text: "Manguesechee"; font-size: 22px; color: #e0e0ff; font-weight: 700; }
-            Rectangle { horizontal-stretch: 1; }
-            Text { text: root.local-name; font-size: 13px; color: #888;
-                   vertical-alignment: center; }
-        }
-
+        // ── Sidebar Navigation ──────────────────────────────────────────────
         Rectangle {
-            background: #16213e; border-radius: 6px; height: 40px;
-            HorizontalBox {
-                padding: 10px;
-                Text { text: root.status; color: #aaf; font-size: 13px;
-                       vertical-alignment: center; }
-                Rectangle { horizontal-stretch: 1; }
-                Switch {
-                    text: "Discovery"; checked: root.discovery;
-                    toggled => { root.toggle-discovery(self.checked); }
-                }
-            }
-        }
+            width: 200px;
+            background: #181926;
 
-        GroupBox {
-            title: "Peers"; vertical-stretch: 1;
             VerticalBox {
-                spacing: 6px;
-                for peer[i] in root.peers : HorizontalBox {
-                    spacing: 10px; padding: 8px;
-                    Rectangle {
-                        width: 8px; height: 8px; border-radius: 4px;
-                        background: peer.connected ? #44ff88
-                                  : (peer.paired   ? #ffaa44 : #555);
-                        y: (parent.height - self.height) / 2;
+                padding: 16px; spacing: 8px;
+
+                // Brand
+                HorizontalBox {
+                    spacing: 10px; padding-bottom: 12px;
+                    Image {
+                        source: @image-url("../../../assets/icons/manguesechee-48.png");
+                        width: 28px; height: 28px;
                     }
+                    Text {
+                        text: "Manguesechee"; font-size: 17px; font-weight: 700; color: #e0e0ff;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Nav Items
+                Rectangle {
+                    height: 38px; border-radius: 6px;
+                    background: root.active-tab == 0 ? #2b2d42 : transparent;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px;
+                        Text { text: "🖥️  Peers"; font-size: 14px; font-weight: 600; color: root.active-tab == 0 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.active-tab = 0; } }
+                }
+
+                Rectangle {
+                    height: 38px; border-radius: 6px;
+                    background: root.active-tab == 1 ? #2b2d42 : transparent;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px;
+                        Text { text: "📐  Topology"; font-size: 14px; font-weight: 600; color: root.active-tab == 1 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.active-tab = 1; } }
+                }
+
+                Rectangle {
+                    height: 38px; border-radius: 6px;
+                    background: root.active-tab == 2 ? #2b2d42 : transparent;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px;
+                        Text { text: "⚙️  Settings"; font-size: 14px; font-weight: 600; color: root.active-tab == 2 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.active-tab = 2; } }
+                }
+
+                Rectangle {
+                    height: 38px; border-radius: 6px;
+                    background: root.active-tab == 3 ? #2b2d42 : transparent;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px;
+                        Text { text: "📜  Logs"; font-size: 14px; font-weight: 600; color: root.active-tab == 3 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.active-tab = 3; root.refresh-logs(); } }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                // Sidebar Footer: Local Identity & Daemon Pill
+                Rectangle {
+                    background: #11121c; border-radius: 8px; height: 60px;
                     VerticalBox {
-                        spacing: 2px; horizontal-stretch: 1;
-                        Text { text: peer.name;    color: #e0e0ff; font-size: 14px; }
-                        Text { text: peer.address; color: #777;   font-size: 11px; }
-                    }
-                    Button {
-                        text: peer.connected ? "Disconnect" : "Connect";
-                        primary: !peer.connected;
-                        clicked => {
-                            if (peer.connected) { root.disconnect-requested(); }
-                            else { root.connect-requested(peer.address); }
+                        padding: 8px; spacing: 4px;
+                        HorizontalBox {
+                            Text { text: "Device:"; font-size: 11px; color: #72748a; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.local-name; font-size: 12px; font-weight: 600; color: #e0e0ff; overflow: elide; }
+                        }
+                        HorizontalBox {
+                            spacing: 6px;
+                            Rectangle {
+                                width: 8px; height: 8px; border-radius: 4px;
+                                background: root.is-service-running ? #38ef7d : #ef4444;
+                                y: (parent.height - self.height) / 2;
+                            }
+                            Text {
+                                text: root.is-service-running ? "Daemon: Running" : "Daemon: Stopped";
+                                font-size: 11px; color: root.is-service-running ? #38ef7d : #f87171;
+                            }
                         }
                     }
                 }
-                if root.peers.length == 0 : Text {
-                    text: "Scanning for peers on the LAN…";
-                    color: #555; font-size: 13px; horizontal-alignment: center;
-                }
             }
         }
 
-        GroupBox {
-            title: "Manual connect";
-            HorizontalBox {
-                spacing: 8px;
-                manual := LineEdit { placeholder-text: "host:24800"; horizontal-stretch: 1; }
-                Button { text: "Connect";
-                         clicked => { root.connect-requested(manual.text); } }
+        // ── Main Content Body ───────────────────────────────────────────────
+        Rectangle {
+            horizontal-stretch: 1;
+            background: #11121c;
+
+            VerticalBox {
+                padding: 18px; spacing: 14px;
+
+                // Header status bar with Live Service Controls
+                Rectangle {
+                    height: 52px; background: #181926; border-radius: 8px;
+                    HorizontalBox {
+                        padding-left: 16px; padding-right: 16px; spacing: 12px;
+                        Text {
+                            text: root.active-tab == 0 ? "Peers & Connections"
+                                : (root.active-tab == 1 ? "Screen Topology Layout"
+                                : (root.active-tab == 2 ? "System Settings" : "System Logs"));
+                            font-size: 17px; font-weight: 700; color: #e0e0ff;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+
+                        // Status Badge
+                        Rectangle {
+                            background: #232536; border-radius: 12px; height: 28px;
+                            HorizontalBox {
+                                padding-left: 10px; padding-right: 10px; spacing: 6px;
+                                Rectangle {
+                                    width: 7px; height: 7px; border-radius: 3.5px;
+                                    background: root.is-service-running ? #4ade80 : #ef4444;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                Text {
+                                    text: root.is-service-running ? root.status : "Service Stopped";
+                                    font-size: 12px;
+                                    color: root.is-service-running ? #a5b4fc : #f87171;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Live Service Controls (Start, Stop, Restart)
+                        if root.is-service-running : HorizontalBox {
+                            spacing: 6px;
+                            Button {
+                                text: "🔄 Restart";
+                                clicked => { root.restart-service(); }
+                            }
+                            Button {
+                                text: "⏹ Stop";
+                                clicked => { root.stop-service(); }
+                            }
+                        }
+                        if !root.is-service-running : Button {
+                            text: "▶ Start Daemon";
+                            primary: true;
+                            clicked => { root.start-service(); }
+                        }
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // TAB 0: PEERS & CONNECTIONS
+                // ─────────────────────────────────────────────────────────────
+                if root.active-tab == 0 : VerticalBox {
+                    spacing: 12px; vertical-stretch: 1;
+
+                    // Server & Client Status Overview Card
+                    Rectangle {
+                        height: 70px; background: #181926; border-radius: 8px;
+                        HorizontalBox {
+                            padding: 12px; spacing: 16px;
+                            VerticalBox {
+                                spacing: 2px;
+                                Text { text: "Active Role:"; font-size: 11px; color: #72748a; }
+                                Text { text: root.role-label; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                            }
+                            Rectangle { width: 1px; background: #2b2d42; }
+                            VerticalBox {
+                                spacing: 2px;
+                                Text { text: "Listening Port:"; font-size: 11px; color: #72748a; }
+                                Text { text: "TCP " + root.setting-port; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                            }
+                            Rectangle { width: 1px; background: #2b2d42; }
+                            VerticalBox {
+                                spacing: 2px;
+                                Text { text: "Auto-Discovery:"; font-size: 11px; color: #72748a; }
+                                Text { text: root.discovery ? "mDNS Active" : "Disabled"; font-size: 14px; font-weight: 600; color: root.discovery ? #38ef7d : #f59e0b; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+
+                    // Direct Connect Bar
+                    GroupBox {
+                        title: "Direct Connect";
+                        HorizontalBox {
+                            spacing: 8px;
+                            manual-ip := LineEdit {
+                                placeholder-text: "Enter peer IP:port (e.g. 192.168.1.50:24800)";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "Connect"; primary: true;
+                                enabled: root.is-service-running;
+                                clicked => { root.connect-requested(manual-ip.text); }
+                            }
+                        }
+                    }
+
+                    // Discovered & Configured Peers List
+                    GroupBox {
+                        title: "Discovered & Configured Peers"; vertical-stretch: 1;
+                        VerticalBox {
+                            spacing: 8px;
+
+                            for peer[i] in root.peers : Rectangle {
+                                height: 56px; background: #181926; border-radius: 6px;
+                                HorizontalBox {
+                                    padding: 10px; spacing: 12px;
+                                    Rectangle {
+                                        width: 10px; height: 10px; border-radius: 5px;
+                                        background: peer.connected ? #38ef7d : (peer.paired ? #f59e0b : #6b7280);
+                                        y: (parent.height - self.height) / 2;
+                                    }
+                                    VerticalBox {
+                                        spacing: 2px; horizontal-stretch: 1;
+                                        HorizontalBox {
+                                            spacing: 8px;
+                                            Text { text: peer.name; font-size: 14px; font-weight: 600; color: #e0e0ff; }
+                                            Rectangle {
+                                                background: #2b2d42; border-radius: 4px; height: 18px;
+                                                HorizontalBox {
+                                                    padding-left: 6px; padding-right: 6px;
+                                                    Text { text: peer.position; font-size: 11px; color: #94a3b8; }
+                                                }
+                                            }
+                                        }
+                                        Text { text: peer.address; font-size: 12px; color: #72748a; }
+                                    }
+                                    Button {
+                                        text: peer.connected ? "Disconnect" : "Connect";
+                                        primary: !peer.connected;
+                                        enabled: root.is-service-running;
+                                        clicked => {
+                                            if peer.connected { root.disconnect-requested(); }
+                                            else { root.connect-requested(peer.address); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.peers.length == 0 : VerticalBox {
+                                alignment: center; padding: 20px; spacing: 8px;
+                                Text { text: "No peers currently detected on the local network."; color: #8e90a6; horizontal-alignment: center; }
+                                Text { text: "Ensure the other machine has Manguesechee installed and is connected to the same Wi-Fi/LAN."; font-size: 12px; color: #5a5c72; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // TAB 1: SCREEN TOPOLOGY
+                // ─────────────────────────────────────────────────────────────
+                if root.active-tab == 1 : VerticalBox {
+                    spacing: 16px; vertical-stretch: 1;
+
+                    Text {
+                        text: "Configure the physical arrangement of your screens. Moving your mouse past this screen's edge transfers control to the peer screen.";
+                        color: #8e90a6; font-size: 13px; wrap: word-wrap;
+                    }
+
+                    // Visual Monitor Placement Grid
+                    Rectangle {
+                        height: 260px; background: #181926; border-radius: 8px;
+                        VerticalBox {
+                            padding: 16px; spacing: 10px; alignment: center;
+
+                            // Top Slot
+                            HorizontalBox {
+                                alignment: center;
+                                Rectangle {
+                                    width: 140px; height: 50px; border-radius: 6px;
+                                    background: root.setting-peer-pos == "above" ? #3b82f6 : #232536;
+                                    Text {
+                                        text: root.setting-peer-pos == "above" ? "Peer (Above)" : "Top Edge";
+                                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.setting-peer-pos = "above"; root.save-topology("above"); } }
+                                }
+                            }
+
+                            // Middle Row: Left Slot | THIS SCREEN | Right Slot
+                            HorizontalBox {
+                                alignment: center; spacing: 12px;
+
+                                // Left Slot
+                                Rectangle {
+                                    width: 130px; height: 80px; border-radius: 6px;
+                                    background: root.setting-peer-pos == "left" ? #3b82f6 : #232536;
+                                    Text {
+                                        text: root.setting-peer-pos == "left" ? "Peer (Left)" : "Left Edge";
+                                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.setting-peer-pos = "left"; root.save-topology("left"); } }
+                                }
+
+                                // Central Screen (This Machine)
+                                Rectangle {
+                                    width: 180px; height: 95px; border-radius: 8px;
+                                    background: #4f46e5; border-width: 2px; border-color: #818cf8;
+                                    VerticalBox {
+                                        alignment: center; spacing: 4px;
+                                        Text { text: "🖥️ " + root.local-name; font-size: 14px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                                        Text { text: "(This Machine)"; font-size: 11px; color: #c7d2fe; horizontal-alignment: center; }
+                                        Text { text: root.setting-width + "×" + root.setting-height; font-size: 11px; color: #e0e7ff; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                // Right Slot
+                                Rectangle {
+                                    width: 130px; height: 80px; border-radius: 6px;
+                                    background: root.setting-peer-pos == "right" ? #3b82f6 : #232536;
+                                    Text {
+                                        text: root.setting-peer-pos == "right" ? "Peer (Right)" : "Right Edge";
+                                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.setting-peer-pos = "right"; root.save-topology("right"); } }
+                                }
+                            }
+
+                            // Bottom Slot
+                            HorizontalBox {
+                                alignment: center;
+                                Rectangle {
+                                    width: 140px; height: 50px; border-radius: 6px;
+                                    background: root.setting-peer-pos == "below" ? #3b82f6 : #232536;
+                                    Text {
+                                        text: root.setting-peer-pos == "below" ? "Peer (Below)" : "Bottom Edge";
+                                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.setting-peer-pos = "below"; root.save-topology("below"); } }
+                                }
+                            }
+                        }
+                    }
+
+                    // Selector & Save Control
+                    HorizontalBox {
+                        spacing: 12px;
+                        Text { text: "Select Peer Screen Location:"; color: #b4b7d6; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+                        ComboBox {
+                            model: ["Right", "Left", "Above", "Below"];
+                            current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
+                            selected => {
+                                root.setting-peer-pos = self.current-value.to-lowercase();
+                                root.save-topology(root.setting-peer-pos);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Save Topology"; primary: true;
+                            clicked => { root.save-topology(root.setting-peer-pos); }
+                        }
+                    }
+
+                    if root.settings-feedback != "" : Text {
+                        text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600;
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // TAB 2: SETTINGS
+                // ─────────────────────────────────────────────────────────────
+                if root.active-tab == 2 : ScrollView {
+                    vertical-stretch: 1;
+                    VerticalBox {
+                        spacing: 14px; padding-right: 10px;
+
+                        GroupBox {
+                            title: "Machine & Role Configuration";
+                            VerticalBox {
+                                spacing: 10px;
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Device Name:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-name; horizontal-stretch: 1; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Operational Role:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    ComboBox {
+                                        model: ["Both (Controller & Controlled Peer)", "Controller only (Send local inputs)", "Peer only (Receive remote inputs)"];
+                                        current-index: root.setting-role;
+                                        selected => { root.setting-role = self.current-index; }
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Network & Daemon Settings";
+                            VerticalBox {
+                                spacing: 10px;
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Listening TCP Port:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-port; horizontal-stretch: 1; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "mDNS Discovery:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    Switch { text: root.setting-discovery ? "Enabled" : "Disabled"; checked <=> root.setting-discovery; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Clipboard Sharing:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    Switch { text: root.setting-clipboard ? "Enabled" : "Disabled"; checked <=> root.setting-clipboard; }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Display Geometry (Edge Detection Boundaries)";
+                            VerticalBox {
+                                spacing: 10px;
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Screen Width (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-width; horizontal-stretch: 1; }
+                                    Text { text: "Height (px):"; width: 80px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-height; horizontal-stretch: 1; }
+                                    Button { text: "Auto-Detect"; clicked => { root.auto-detect-screen(); } }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Default Peer Connection";
+                            VerticalBox {
+                                spacing: 10px;
+                                HorizontalBox {
+                                    spacing: 10px;
+                                    Text { text: "Peer IP Address:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { placeholder-text: "192.168.1.50:24800"; text <=> root.setting-peer-addr; horizontal-stretch: 1; }
+                                    Text { text: "Side:"; width: 40px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    ComboBox {
+                                        model: ["Right", "Left", "Above", "Below"];
+                                        current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
+                                        selected => { root.setting-peer-pos = self.current-value.to-lowercase(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            if root.settings-feedback != "" : Text {
+                                text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600; vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: "Save & Apply Settings"; primary: true;
+                                clicked => { root.save-settings(); }
+                            }
+                        }
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // TAB 3: LOGS CONSOLE
+                // ─────────────────────────────────────────────────────────────
+                if root.active-tab == 3 : VerticalBox {
+                    spacing: 10px; vertical-stretch: 1;
+
+                    HorizontalBox {
+                        Text { text: "Live Agent Activity & Events"; color: #8e90a6; font-size: 13px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "🔄 Refresh"; clicked => { root.refresh-logs(); } }
+                        Button { text: "Clear"; clicked => { root.clear-logs(); } }
+                    }
+
+                    Rectangle {
+                        background: #090a10; border-radius: 6px; border-width: 1px; border-color: #232536;
+                        vertical-stretch: 1;
+                        ScrollView {
+                            VerticalBox {
+                                padding: 12px; spacing: 4px;
+                                for line in root.log-lines : Text {
+                                    text: line;
+                                    font-size: 11px;
+                                    font-family: "monospace";
+                                    color: #cbd5e1;
+                                }
+                                if root.log-lines.length == 0 : Text {
+                                    text: "No logs recorded yet. Click Refresh to load from systemd.";
+                                    font-size: 12px; color: #64748b;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -2939,6 +2939,7 @@ dependencies = [
  "dirs",
  "libc",
  "manguesechee-core",
+ "manguesechee-input",
  "serde",
  "serde_json",
  "slint",
