@@ -2890,6 +2890,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "dirs",
+ "libc",
  "manguesechee-core",
  "manguesechee-input",
  "manguesechee-network",

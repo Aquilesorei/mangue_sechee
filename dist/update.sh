@@ -52,6 +52,26 @@ if ! command -v pkg-config &>/dev/null || ! pkg-config --exists fontconfig 2>/de
     fi
 fi
 
+# Ensure clipboard utilities (wl-clipboard & xclip) are installed
+if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null; then
+    echo "==> Ensuring clipboard utilities (wl-clipboard, xclip) are installed…"
+    if command -v apt-get &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y wl-clipboard xclip 2>/dev/null || true
+        else
+            sudo apt-get update -qq 2>/dev/null || true
+            sudo apt-get install -y wl-clipboard xclip 2>/dev/null || true
+        fi
+    elif command -v dnf &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            dnf install -y wl-clipboard xclip 2>/dev/null || true
+        else
+            sudo dnf install -y wl-clipboard xclip 2>/dev/null || true
+        fi
+    fi
+fi
+
 echo "==> Building updated release binaries…"
 cd "$REPO_ROOT"
 
@@ -113,17 +133,32 @@ if [[ -n "$TARGET_USER" ]]; then
     done
 fi
 
+# Update systemd user service
+if [[ -f "$REPO_ROOT/dist/manguesechee-agent.service" ]]; then
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/manguesechee-agent.service" /usr/lib/systemd/user/manguesechee-agent.service
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/manguesechee-agent.service" /etc/systemd/user/manguesechee-agent.service 2>/dev/null || true
+fi
+
 $SUDO_CMD gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 $SUDO_CMD update-desktop-database /usr/share/applications 2>/dev/null || true
 
 echo "    ✓ Updated /usr/bin/manguesechee-agent"
 echo "    ✓ Updated /usr/bin/manguesechee-ui"
 echo "    ✓ Applied udev rules & /dev/uinput permissions"
+echo "    ✓ Updated systemd service unit"
 
 # ── 4. Restart Running Agent Service ─────────────────────────────────────────
 
 echo "==> Restarting manguesechee-agent service…"
 if [[ -n "$TARGET_USER" ]]; then
+    systemctl --user -M "${TARGET_USER}@" daemon-reload 2>/dev/null || true
+    if [[ "$EUID" -eq 0 ]]; then
+        su -l "$TARGET_USER" -c \
+          "XDG_RUNTIME_DIR=/run/user/$TARGET_UID systemctl --user daemon-reload" 2>/dev/null || true
+    else
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
+
     if systemctl --user -M "${TARGET_USER}@" restart manguesechee-agent 2>/dev/null; then
         echo "    ✓ Service restarted for $TARGET_USER"
     elif [[ "$EUID" -eq 0 ]]; then
@@ -135,6 +170,7 @@ if [[ -n "$TARGET_USER" ]]; then
         echo "    ✓ Service restarted"
     fi
 fi
+
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

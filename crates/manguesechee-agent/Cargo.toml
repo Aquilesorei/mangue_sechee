@@ -22,3 +22,4 @@ rand               = { workspace = true }
 serde_json         = { workspace = true }
 dirs               = { workspace = true }
 arboard = { workspace = true }
+libc    = { workspace = true }

@@ -98,17 +98,14 @@ fi
 
 # ── 5. Clipboard Tools (wl-clipboard / xclip) ────────────────────────────────
 
-if command -v wl-copy &>/dev/null || command -v xclip &>/dev/null; then
-    echo "    ✓ Clipboard utility available ($(command -v wl-copy 2>/dev/null || command -v xclip 2>/dev/null))"
-else
-    echo "==> Installing clipboard utility…"
-    if command -v dnf &>/dev/null; then
-        dnf install -y wl-clipboard 2>/dev/null || true
-    elif command -v apt-get &>/dev/null; then
-        apt-get update -qq 2>/dev/null || true
-        apt-get install -y wl-clipboard 2>/dev/null || true
-    fi
+echo "==> Ensuring clipboard utilities (wl-clipboard & xclip) are installed…"
+if command -v dnf &>/dev/null; then
+    dnf install -y wl-clipboard xclip 2>/dev/null || true
+elif command -v apt-get &>/dev/null; then
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y wl-clipboard xclip 2>/dev/null || true
 fi
+
 
 # ── 6. User Configuration File ───────────────────────────────────────────────
 

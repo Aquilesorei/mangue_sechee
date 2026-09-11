@@ -34,9 +34,98 @@ pub fn is_already_synced(text: &str) -> bool {
     }
 }
 
-/// Read text from the local clipboard across all available backends (arboard, wl-paste, xclip, xsel).
+/// Ensure environment variables required for Wayland and X11 clipboard access are set.
+/// When running under a systemd --user service, DISPLAY, WAYLAND_DISPLAY, or XAUTHORITY
+/// may not have been imported into the service manager's environment.
+pub fn ensure_display_env() {
+    let uid = unsafe { libc::getuid() };
+
+    // 1. Ensure XDG_RUNTIME_DIR is set
+    let runtime_dir = match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => {
+            let dir = format!("/run/user/{}", uid);
+            let p = std::path::PathBuf::from(&dir);
+            if p.exists() {
+                std::env::set_var("XDG_RUNTIME_DIR", &dir);
+                p
+            } else {
+                std::path::PathBuf::from(format!("/tmp/manguesechee-{}", uid))
+            }
+        }
+    };
+
+    // 2. Ensure WAYLAND_DISPLAY is set if a Wayland socket exists
+    if std::env::var("WAYLAND_DISPLAY").is_err() {
+        for i in 0..5 {
+            let name = if i == 0 {
+                "wayland-0".to_string()
+            } else {
+                format!("wayland-{}", i)
+            };
+            if runtime_dir.join(&name).exists() {
+                debug!("auto-detected WAYLAND_DISPLAY={name}");
+                std::env::set_var("WAYLAND_DISPLAY", &name);
+                break;
+            }
+        }
+    }
+
+    // 3. Ensure DISPLAY is set if an X11 socket exists
+    if std::env::var("DISPLAY").is_err() {
+        for i in 0..5 {
+            let x_socket = format!("/tmp/.X11-unix/X{}", i);
+            if std::path::Path::new(&x_socket).exists() {
+                let disp = format!(":{}", i);
+                debug!("auto-detected DISPLAY={disp}");
+                std::env::set_var("DISPLAY", &disp);
+                break;
+            }
+        }
+    }
+
+    // 4. Ensure XAUTHORITY is set for X11 authentication
+    if std::env::var("XAUTHORITY").is_err() {
+        if let Some(home) = dirs::home_dir() {
+            let xauth = home.join(".Xauthority");
+            if xauth.exists() {
+                std::env::set_var("XAUTHORITY", xauth.to_string_lossy().as_ref());
+            }
+        }
+        if std::env::var("XAUTHORITY").is_err() && runtime_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name();
+                    let name = file_name.to_string_lossy();
+                    if name.starts_with("xauth_") || name.ends_with(".xauth") || name == "Xauthority" {
+                        std::env::set_var("XAUTHORITY", entry.path().to_string_lossy().as_ref());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Read text from the local clipboard across all available backends (wl-paste, arboard, xclip, xsel).
 pub fn get_text() -> Option<String> {
-    // 1. Try native arboard
+    ensure_display_env();
+
+    // 1. Wayland fallback via wl-paste (standard across KDE, COSMIC, GNOME, Sway)
+    if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
+            }
+        }
+    }
+
+    // 2. Native arboard
     if let Ok(mut guard) = CLIPBOARD.lock() {
         if guard.is_none() {
             *guard = Clipboard::new().ok();
@@ -46,52 +135,35 @@ pub fn get_text() -> Option<String> {
                 if !text.is_empty() {
                     return Some(text);
                 }
-            } else {
-                // Re-initialize if compositor connection was reset
-                *guard = Clipboard::new().ok();
-                if let Some(cb) = guard.as_mut() {
-                    if let Ok(text) = cb.get_text() {
-                        if !text.is_empty() {
-                            return Some(text);
-                        }
-                    }
-                }
             }
-        }
-    }
-
-    // 2. Wayland fallback via wl-paste (standard across KDE, COSMIC, GNOME, Sway)
-    if let Ok(output) = std::process::Command::new("wl-paste")
-        .arg("--no-newline")
-        .output()
-    {
-        if output.status.success() && !output.stdout.is_empty() {
-            if let Ok(text) = String::from_utf8(output.stdout) {
-                return Some(text);
-            }
+            // CRITICAL: Do NOT re-create `*guard = Clipboard::new().ok()` on Err!
+            // In arboard/X11, cb holds ownership of the selection. Recreating Clipboard
+            // closes the X11 connection window, destroying any active selection.
         }
     }
 
     // 3. X11 fallback via xclip
-    if let Ok(output) = std::process::Command::new("xclip")
-        .args(["-selection", "clipboard", "-o"])
-        .output()
-    {
-        if output.status.success() && !output.stdout.is_empty() {
-            if let Ok(text) = String::from_utf8(output.stdout) {
-                return Some(text);
+    if std::env::var("DISPLAY").is_ok() {
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
             }
         }
-    }
 
-    // 4. X11 fallback via xsel
-    if let Ok(output) = std::process::Command::new("xsel")
-        .args(["--clipboard", "--output"])
-        .output()
-    {
-        if output.status.success() && !output.stdout.is_empty() {
-            if let Ok(text) = String::from_utf8(output.stdout) {
-                return Some(text);
+        // 4. X11 fallback via xsel
+        if let Ok(output) = std::process::Command::new("xsel")
+            .args(["--clipboard", "--output"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
             }
         }
     }
@@ -101,6 +173,7 @@ pub fn get_text() -> Option<String> {
 
 /// Write text into the local clipboard and keep it available for pasting across all applications.
 pub fn set_text(text: &str) -> anyhow::Result<()> {
+    ensure_display_env();
     mark_synced(text);
     let mut success = false;
 
@@ -125,52 +198,56 @@ pub fn set_text(text: &str) -> anyhow::Result<()> {
 
     // 2. Wayland native fallback via wl-copy
     // wl-copy forks into background and retains the selection across app switches
-    if let Ok(mut child) = std::process::Command::new("wl-copy")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(text.as_bytes());
-            drop(stdin);
-            let _ = child.wait();
-            success = true;
+    if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        if let Ok(mut child) = std::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+                drop(stdin);
+                let _ = child.wait();
+                success = true;
+            }
         }
     }
 
     // 3. X11 fallback via xclip
-    if let Ok(mut child) = std::process::Command::new("xclip")
-        .args(["-selection", "clipboard"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(text.as_bytes());
-            drop(stdin);
-            let _ = child.wait();
-            success = true;
+    if std::env::var("DISPLAY").is_ok() {
+        if let Ok(mut child) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+                drop(stdin);
+                let _ = child.wait();
+                success = true;
+            }
         }
-    }
 
-    // 4. X11 fallback via xsel
-    if let Ok(mut child) = std::process::Command::new("xsel")
-        .args(["--clipboard", "--input"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(text.as_bytes());
-            drop(stdin);
-            let _ = child.wait();
-            success = true;
+        // 4. X11 fallback via xsel
+        if let Ok(mut child) = std::process::Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+                drop(stdin);
+                let _ = child.wait();
+                success = true;
+            }
         }
     }
 
@@ -181,6 +258,7 @@ pub fn set_text(text: &str) -> anyhow::Result<()> {
         anyhow::bail!("failed to write clipboard via any backend")
     }
 }
+
 
 /// Spawn a continuous background watcher that monitors local clipboard changes
 /// and sends `Message::ClipboardSync` over `tx`. Automatically stops when `tx` is closed.

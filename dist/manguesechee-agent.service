@@ -9,6 +9,7 @@ ExecStart=/usr/bin/manguesechee-agent
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=info
+PassEnvironment=DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE XAUTHORITY
 
 [Install]
 WantedBy=default.target

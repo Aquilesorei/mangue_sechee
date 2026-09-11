@@ -33,6 +33,7 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    clipboard::ensure_display_env();
 
     let cfg  = config::ensure_default().context("load config")?;
     let args: Vec<String> = std::env::args().collect();

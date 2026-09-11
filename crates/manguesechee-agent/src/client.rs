@@ -381,9 +381,8 @@ pub async fn connect_to(
                                     // Immediate clipboard sync on entering peer screen
                                     if clipboard_enabled {
                                         if let Some(text) = clipboard::get_text() {
-                                            if !text.is_empty() && !clipboard::is_already_synced(&text) {
+                                            if !text.is_empty() {
                                                 info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
-                                                clipboard::mark_synced(&text);
                                                 let _ = sender.send(&Message::ClipboardSync { text }).await;
                                             }
                                         }
