@@ -528,7 +528,7 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, peers, cursor_locked, last_error, topology_configured,
+                    local_name, connected_to, discovery, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history,
                 }) = poll_status()
                 {
                     w.set_local_name(local_name.into());
@@ -539,10 +539,38 @@ fn main() -> anyhow::Result<()> {
                         None    => "Ready".into(),
                     });
 
+                    // File transfer updates
+                    let transfers: Vec<TransferItem> = active_transfers.iter().map(|t| {
+                        let pct = if t.total_bytes > 0 {
+                            (t.bytes_transferred as f32 / t.total_bytes as f32).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        TransferItem {
+                            name: t.filename.clone().into(),
+                            size_text: format!("{}/{}", format_bytes_ui(t.bytes_transferred), format_bytes_ui(t.total_bytes)).into(),
+                            progress: pct,
+                            status_text: format!("{:.0}%", pct * 100.0).into(),
+                            is_receiving: t.is_receiving,
+                        }
+                    }).collect();
+                    w.set_active_transfers(transfers.as_slice().into());
+
+                    let history: Vec<HistoryItem> = transfer_history.iter().map(|h| {
+                        HistoryItem {
+                            name: h.filename.clone().into(),
+                            size_text: format_bytes_ui(h.total_bytes).into(),
+                            time_text: h.completed_at.clone().into(),
+                            is_receiving: h.is_receiving,
+                        }
+                    }).collect();
+                    w.set_transfer_history(history.as_slice().into());
+
                     // Connection error update
                     if let Some(err) = last_error {
                         w.set_connection_error(err.into());
                     }
+
 
                     // Connected peer detection
                     let active_peer_info = peers.iter().find(|p| p.connected);
@@ -892,3 +920,20 @@ fn poll_status() -> Option<ipc::AgentEvent> {
 fn enable_autostart() {
     let _ = Command::new("systemctl").args(["--user", "enable", "--now", "manguesechee-agent"]).status();
 }
+
+fn format_bytes_ui(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+

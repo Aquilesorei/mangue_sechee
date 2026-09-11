@@ -76,5 +76,38 @@ pub enum Message {
     /// Receiver automatically sets the sender to the complementary opposite position.
     TopologySync { position: String },
 
+    // ── Phase 8 — File Transfer ───────────────────────────────────────────────
+    /// Connection handshake for dedicated secondary data channel
+    FileChannelInit { transfer_id: String },
+
+    /// Start a file transfer (both fast path on main channel or secondary channel)
+    FileTransferOffer {
+        transfer_id: String,
+        files: Vec<FileInfo>,
+        total_size: u64,
+        is_background: bool,
+    },
+
+    /// A chunk of file data
+    FileTransferChunk {
+        transfer_id: String,
+        file_index: usize,
+        offset: u64,
+        data: Vec<u8>,
+        is_last_chunk: bool,
+    },
+
+    /// Completed transfer of all files in this transfer_id
+    FileTransferDone {
+        transfer_id: String,
+    },
+
     Goodbye,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileInfo {
+    pub filename: String,
+    pub size: u64,
+    pub relative_path: Option<String>,
 }

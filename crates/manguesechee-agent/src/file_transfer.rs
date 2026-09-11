@@ -1,0 +1,536 @@
+//! Dedicated background and fast-path file transfer engine.
+//!
+//! - Files <= 15 MB: Streamed inline in 64 KiB chunks over the primary connection.
+//! - Files > 15 MB: Streamed over a dedicated secondary TCP connection on port 24800,
+//!   preventing input jitter and firing `notify-send` when ready to paste.
+
+use anyhow::Context;
+use manguesechee_core::ipc::{FileTransferInfo, TransferHistoryEntry};
+use manguesechee_core::protocol::{FileInfo, Message};
+use manguesechee_network::transport::{TcpSender, TcpTransport, Transport};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use tracing::{debug, info, warn};
+
+use crate::file_clipboard;
+use crate::ipc_server::SharedState;
+
+pub const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+
+/// State tracking an in-flight file reception.
+pub struct ActiveReceiver {
+    pub transfer_id: String,
+    pub files: Vec<FileInfo>,
+    pub _staging_dir: PathBuf,
+    pub disk_paths: Vec<PathBuf>,
+    pub total_size: u64,
+    pub bytes_received: u64,
+    pub is_background: bool,
+    open_files: Vec<Option<File>>,
+}
+
+impl ActiveReceiver {
+    pub fn new(
+        transfer_id: String,
+        files: Vec<FileInfo>,
+        total_size: u64,
+        is_background: bool,
+    ) -> anyhow::Result<Self> {
+        let staging = file_clipboard::staging_dir(&transfer_id);
+        std::fs::create_dir_all(&staging)?;
+
+        let mut disk_paths = Vec::with_capacity(files.len());
+        let mut open_files = Vec::with_capacity(files.len());
+
+        for file in &files {
+            let dest = if let Some(ref rel) = file.relative_path {
+                let p = staging.join(rel);
+                if let Some(parent) = p.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                p
+            } else {
+                staging.join(&file.filename)
+            };
+
+            let f = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&dest)
+                .with_context(|| format!("create {}", dest.display()))?;
+
+            disk_paths.push(dest);
+            open_files.push(Some(f));
+        }
+
+        Ok(Self {
+            transfer_id,
+            files,
+            _staging_dir: staging,
+            disk_paths,
+            total_size,
+            bytes_received: 0,
+            is_background,
+            open_files,
+        })
+    }
+
+    pub fn write_chunk(
+        &mut self,
+        file_index: usize,
+        offset: u64,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        if let Some(Some(f)) = self.open_files.get_mut(file_index) {
+            f.seek(SeekFrom::Start(offset))?;
+            f.write_all(data)?;
+            self.bytes_received += data.len() as u64;
+            Ok(())
+        } else {
+            anyhow::bail!("file index {file_index} not open");
+        }
+    }
+
+    pub fn finish(mut self) -> anyhow::Result<(Vec<PathBuf>, bool, String, u64)> {
+        for f in self.open_files.iter_mut() {
+            if let Some(mut file) = f.take() {
+                let _ = file.flush();
+            }
+        }
+        let first_name = self.files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "file".into());
+        Ok((self.disk_paths, self.is_background, first_name, self.total_size))
+    }
+}
+
+/// Manages incoming transfers (both fast path on main socket and dedicated socket).
+#[derive(Default)]
+pub struct FileReceiver {
+    current: Option<ActiveReceiver>,
+}
+
+impl FileReceiver {
+    pub fn handle_offer(
+        &mut self,
+        transfer_id: String,
+        files: Vec<FileInfo>,
+        total_size: u64,
+        is_background: bool,
+        ipc_state: &SharedState,
+    ) {
+        file_clipboard::clean_old_staged_dirs();
+        let fname = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
+        info!("receiving file transfer '{fname}' ({} bytes, background={is_background})", total_size);
+
+        match ActiveReceiver::new(transfer_id.clone(), files, total_size, is_background) {
+            Ok(receiver) => {
+                self.current = Some(receiver);
+                let mut s = ipc_state.lock().unwrap();
+                s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+                s.active_transfers.push(FileTransferInfo {
+                    transfer_id,
+                    filename: fname,
+                    bytes_transferred: 0,
+                    total_bytes: total_size,
+                    is_receiving: true,
+                });
+            }
+            Err(e) => warn!("failed to initialize file receiver: {e}"),
+        }
+    }
+
+    pub fn handle_chunk(
+        &mut self,
+        transfer_id: &str,
+        file_index: usize,
+        offset: u64,
+        data: &[u8],
+        ipc_state: &SharedState,
+    ) {
+        if let Some(rec) = self.current.as_mut() {
+            if rec.transfer_id == transfer_id {
+                if let Err(e) = rec.write_chunk(file_index, offset, data) {
+                    warn!("error writing chunk: {e}");
+                }
+                let bytes = rec.bytes_received;
+                let mut s = ipc_state.lock().unwrap();
+                if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
+                    t.bytes_transferred = bytes;
+                }
+            }
+        }
+    }
+
+    pub fn handle_done(
+        &mut self,
+        transfer_id: &str,
+        ipc_state: &SharedState,
+    ) {
+        if let Some(rec) = self.current.take() {
+            if rec.transfer_id == transfer_id {
+                match rec.finish() {
+                    Ok((staged_paths, is_bg, first_name, total_bytes)) => {
+                        info!("file transfer complete: {} files staged", staged_paths.len());
+                        if let Err(e) = file_clipboard::set_file_clipboard(&staged_paths) {
+                            warn!("failed to set staged files in clipboard: {e}");
+                        }
+
+                        if is_bg {
+                            let size_str = file_clipboard::format_bytes(total_bytes);
+                            file_clipboard::show_notification(
+                                "Manguesechee",
+                                &format!("File ready to paste: {first_name} ({size_str})"),
+                            );
+                        }
+
+                        let mut s = ipc_state.lock().unwrap();
+                        s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+                        s.transfer_history.insert(0, TransferHistoryEntry {
+                            filename: first_name,
+                            total_bytes,
+                            completed_at: current_timestamp(),
+                            is_receiving: true,
+                        });
+                        if s.transfer_history.len() > 15 {
+                            s.transfer_history.truncate(15);
+                        }
+                    }
+                    Err(e) => warn!("error finishing file transfer: {e}"),
+                }
+            }
+        }
+    }
+}
+
+/// Send files <= 15 MB inline over the primary connection.
+pub async fn send_fast_transfer(
+    transfer_id: String,
+    files: Vec<FileInfo>,
+    disk_paths: Vec<PathBuf>,
+    total_size: u64,
+    sender: &mut TcpSender,
+    ipc_state: &SharedState,
+) -> anyhow::Result<()> {
+    let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
+    info!("sending fast-path files: '{first_name}' ({} bytes)", total_size);
+
+    {
+        let mut s = ipc_state.lock().unwrap();
+        s.active_transfers.push(FileTransferInfo {
+            transfer_id: transfer_id.clone(),
+            filename: first_name.clone(),
+            bytes_transferred: 0,
+            total_bytes: total_size,
+            is_receiving: false,
+        });
+    }
+
+    sender.send(&Message::FileTransferOffer {
+        transfer_id: transfer_id.clone(),
+        files: files.clone(),
+        total_size,
+        is_background: false,
+    }).await?;
+
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut total_sent = 0u64;
+
+    for (idx, path) in disk_paths.iter().enumerate() {
+        let mut f = File::open(path)?;
+        let mut offset = 0u64;
+        let file_len = f.metadata()?.len();
+
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let is_last = offset + (n as u64) >= file_len;
+            sender.send(&Message::FileTransferChunk {
+                transfer_id: transfer_id.clone(),
+                file_index: idx,
+                offset,
+                data: buf[..n].to_vec(),
+                is_last_chunk: is_last,
+            }).await?;
+
+            offset += n as u64;
+            total_sent += n as u64;
+
+            {
+                let mut s = ipc_state.lock().unwrap();
+                if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
+                    t.bytes_transferred = total_sent;
+                }
+            }
+
+            tokio::task::yield_now().await;
+        }
+    }
+
+    sender.send(&Message::FileTransferDone { transfer_id: transfer_id.clone() }).await?;
+
+    {
+        let mut s = ipc_state.lock().unwrap();
+        s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+        s.transfer_history.insert(0, TransferHistoryEntry {
+            filename: first_name,
+            total_bytes: total_size,
+            completed_at: current_timestamp(),
+            is_receiving: false,
+        });
+        if s.transfer_history.len() > 15 {
+            s.transfer_history.truncate(15);
+        }
+    }
+
+    info!("fast-path file transfer completed ({} bytes)", total_size);
+    Ok(())
+}
+
+/// Send files <= 15 MB inline over an mpsc channel (used by server out_tx).
+pub async fn send_fast_transfer_to_channel(
+    transfer_id: String,
+    files: Vec<FileInfo>,
+    disk_paths: Vec<PathBuf>,
+    total_size: u64,
+    tx: &tokio::sync::mpsc::Sender<Message>,
+    ipc_state: &SharedState,
+) -> anyhow::Result<()> {
+    let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
+    info!("sending fast-path files via channel: '{first_name}' ({} bytes)", total_size);
+
+    {
+        let mut s = ipc_state.lock().unwrap();
+        s.active_transfers.push(FileTransferInfo {
+            transfer_id: transfer_id.clone(),
+            filename: first_name.clone(),
+            bytes_transferred: 0,
+            total_bytes: total_size,
+            is_receiving: false,
+        });
+    }
+
+    let _ = tx.send(Message::FileTransferOffer {
+        transfer_id: transfer_id.clone(),
+        files: files.clone(),
+        total_size,
+        is_background: false,
+    }).await;
+
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut total_sent = 0u64;
+
+    for (idx, path) in disk_paths.iter().enumerate() {
+        let mut f = File::open(path)?;
+        let mut offset = 0u64;
+        let file_len = f.metadata()?.len();
+
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let is_last = offset + (n as u64) >= file_len;
+            let _ = tx.send(Message::FileTransferChunk {
+                transfer_id: transfer_id.clone(),
+                file_index: idx,
+                offset,
+                data: buf[..n].to_vec(),
+                is_last_chunk: is_last,
+            }).await;
+
+            offset += n as u64;
+            total_sent += n as u64;
+
+            {
+                let mut s = ipc_state.lock().unwrap();
+                if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
+                    t.bytes_transferred = total_sent;
+                }
+            }
+
+            tokio::task::yield_now().await;
+        }
+    }
+
+    let _ = tx.send(Message::FileTransferDone { transfer_id: transfer_id.clone() }).await;
+
+    {
+        let mut s = ipc_state.lock().unwrap();
+        s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+        s.transfer_history.insert(0, TransferHistoryEntry {
+            filename: first_name,
+            total_bytes: total_size,
+            completed_at: current_timestamp(),
+            is_receiving: false,
+        });
+        if s.transfer_history.len() > 15 {
+            s.transfer_history.truncate(15);
+        }
+    }
+
+    info!("fast-path channel transfer completed ({} bytes)", total_size);
+    Ok(())
+}
+
+/// Spawns a dedicated background task to stream files > 15 MB over a secondary TCP connection.
+pub fn spawn_background_sender(
+    peer_addr: String,
+    files: Vec<FileInfo>,
+    disk_paths: Vec<PathBuf>,
+    total_size: u64,
+    ipc_state: SharedState,
+) {
+    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
+    info!("spawning dedicated background file sender for '{first_name}' ({} bytes) to {peer_addr}", total_size);
+
+    tokio::spawn(async move {
+        {
+            let mut s = ipc_state.lock().unwrap();
+            s.active_transfers.push(FileTransferInfo {
+                transfer_id: transfer_id.clone(),
+                filename: first_name.clone(),
+                bytes_transferred: 0,
+                total_bytes: total_size,
+                is_receiving: false,
+            });
+        }
+
+        match manguesechee_network::connect(&peer_addr).await {
+            Ok(mut transport) => {
+                if let Err(e) = run_background_stream(
+                    &mut transport,
+                    transfer_id.clone(),
+                    files,
+                    disk_paths,
+                    total_size,
+                    &ipc_state,
+                ).await {
+                    warn!("background file transfer failed: {e:#}");
+                }
+                let _ = transport.close().await;
+            }
+            Err(e) => warn!("failed to connect secondary data channel to {peer_addr}: {e:#}"),
+        }
+
+        let mut s = ipc_state.lock().unwrap();
+        s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+        s.transfer_history.insert(0, TransferHistoryEntry {
+            filename: first_name,
+            total_bytes: total_size,
+            completed_at: current_timestamp(),
+            is_receiving: false,
+        });
+        if s.transfer_history.len() > 15 {
+            s.transfer_history.truncate(15);
+        }
+    });
+}
+
+async fn run_background_stream(
+    transport: &mut TcpTransport,
+    transfer_id: String,
+    files: Vec<FileInfo>,
+    disk_paths: Vec<PathBuf>,
+    total_size: u64,
+    ipc_state: &SharedState,
+) -> anyhow::Result<()> {
+    // 1. Handshake as FileChannel
+    transport.send(&Message::FileChannelInit { transfer_id: transfer_id.clone() }).await?;
+
+    // 2. Offer
+    transport.send(&Message::FileTransferOffer {
+        transfer_id: transfer_id.clone(),
+        files,
+        total_size,
+        is_background: true,
+    }).await?;
+
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut total_sent = 0u64;
+
+    // 3. Stream chunks
+    for (idx, path) in disk_paths.iter().enumerate() {
+        let mut f = File::open(path)?;
+        let mut offset = 0u64;
+        let file_len = f.metadata()?.len();
+
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let is_last = offset + (n as u64) >= file_len;
+            transport.send(&Message::FileTransferChunk {
+                transfer_id: transfer_id.clone(),
+                file_index: idx,
+                offset,
+                data: buf[..n].to_vec(),
+                is_last_chunk: is_last,
+            }).await?;
+
+            offset += n as u64;
+            total_sent += n as u64;
+
+            {
+                let mut s = ipc_state.lock().unwrap();
+                if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
+                    t.bytes_transferred = total_sent;
+                }
+            }
+
+            tokio::task::yield_now().await;
+        }
+    }
+
+    // 4. Complete
+    transport.send(&Message::FileTransferDone { transfer_id }).await?;
+    info!("background stream finished ({} bytes)", total_size);
+    Ok(())
+}
+
+/// Handler for an incoming dedicated secondary data socket.
+pub async fn handle_incoming_file_channel(
+    mut transport: TcpTransport,
+    init_transfer_id: String,
+    ipc_state: SharedState,
+) -> anyhow::Result<()> {
+    let mut receiver = FileReceiver::default();
+
+    loop {
+        match transport.receive().await {
+            Ok(Message::FileTransferOffer { transfer_id, files, total_size, is_background }) => {
+                receiver.handle_offer(transfer_id, files, total_size, is_background, &ipc_state);
+            }
+            Ok(Message::FileTransferChunk { transfer_id, file_index, offset, data, is_last_chunk: _ }) => {
+                receiver.handle_chunk(&transfer_id, file_index, offset, &data, &ipc_state);
+            }
+            Ok(Message::FileTransferDone { transfer_id }) => {
+                receiver.handle_done(&transfer_id, &ipc_state);
+                break;
+            }
+            Ok(other) => {
+                debug!("unexpected message on file channel: {other:?}");
+            }
+            Err(e) => {
+                debug!("file channel ended: {e}");
+                break;
+            }
+        }
+    }
+
+    let _ = init_transfer_id;
+    Ok(())
+}
+
+fn current_timestamp() -> String {
+    let now = std::time::SystemTime::now();
+    let since = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let hours = (since / 3600) % 24;
+    let minutes = (since / 60) % 60;
+    let seconds = since % 60;
+    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+}

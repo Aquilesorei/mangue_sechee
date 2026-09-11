@@ -16,6 +16,8 @@ pub struct AgentState {
     pub last_error:          Option<String>,
     pub topology_configured: bool,
     pub peers:               Vec<PeerInfo>,
+    pub active_transfers:    Vec<manguesechee_core::ipc::FileTransferInfo>,
+    pub transfer_history:    Vec<manguesechee_core::ipc::TransferHistoryEntry>,
 }
 
 pub type SharedState = Arc<Mutex<AgentState>>;
@@ -98,6 +100,8 @@ fn handle_command(
                 last_error:          s.last_error.clone(),
                 topology_configured: s.topology_configured,
                 peers:               s.peers.clone(),
+                active_transfers:    s.active_transfers.clone(),
+                transfer_history:    s.transfer_history.clone(),
             }
         }
         GuiCommand::Connect { address } => {

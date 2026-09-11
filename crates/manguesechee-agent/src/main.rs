@@ -19,6 +19,8 @@ mod clipboard;
 mod client;
 mod discovery;
 mod edge;
+mod file_clipboard;
+mod file_transfer;
 mod ipc_server;
 mod server;
 mod session;

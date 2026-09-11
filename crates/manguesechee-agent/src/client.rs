@@ -258,11 +258,21 @@ pub async fn connect_to(
     let state_for_recv = Arc::clone(&ipc_state);
     let peer_addr_str = addr.to_string();
     tokio::spawn(async move {
+        let mut file_receiver = crate::file_transfer::FileReceiver::default();
         loop {
             match receiver.receive().await {
                 Ok(Message::ReturnControl { edge }) => {
                     info!("← ReturnControl ({edge:?})");
                     let _ = return_tx.send(()).await;
+                }
+                Ok(Message::FileTransferOffer { transfer_id, files, total_size, is_background }) => {
+                    file_receiver.handle_offer(transfer_id, files, total_size, is_background, &state_for_recv);
+                }
+                Ok(Message::FileTransferChunk { transfer_id, file_index, offset, data, is_last_chunk: _ }) => {
+                    file_receiver.handle_chunk(&transfer_id, file_index, offset, &data, &state_for_recv);
+                }
+                Ok(Message::FileTransferDone { transfer_id }) => {
+                    file_receiver.handle_done(&transfer_id, &state_for_recv);
                 }
                 Ok(Message::ClipboardSync { text }) => {
                     info!("← ClipboardSync from server ({} bytes)", text.len());
@@ -382,8 +392,22 @@ pub async fn connect_to(
                                     if clipboard_enabled {
                                         if let Some(text) = clipboard::get_text() {
                                             if !text.is_empty() {
-                                                info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
-                                                let _ = sender.send(&Message::ClipboardSync { text }).await;
+                                                if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                                                    let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                                                    let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                                                    let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                                                    let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+
+                                                    if total_size <= fast_limit {
+                                                        let tid = uuid::Uuid::new_v4().to_string();
+                                                        let _ = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await;
+                                                    } else if total_size <= bg_limit {
+                                                        crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
+                                                    }
+                                                } else {
+                                                    info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
+                                                    let _ = sender.send(&Message::ClipboardSync { text }).await;
+                                                }
                                             }
                                         }
                                     }
@@ -414,11 +438,36 @@ pub async fn connect_to(
 
             // Outgoing clipboard change
             Some(clip_msg) = clip_msg_rx.recv() => {
-                if let Err(e) = sender.send(&clip_msg).await {
-                    warn!("failed to send clipboard sync: {e}");
-                    break;
+                match clip_msg {
+                    Message::ClipboardSync { text } => {
+                        if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                            let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                            let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                            let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                            let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+
+                            if total_size <= fast_limit {
+                                let tid = uuid::Uuid::new_v4().to_string();
+                                let _ = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await;
+                            } else if total_size <= bg_limit {
+                                crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
+                            }
+                        } else {
+                            if let Err(e) = sender.send(&Message::ClipboardSync { text }).await {
+                                warn!("failed to send clipboard sync: {e}");
+                                break;
+                            }
+                        }
+                    }
+                    other => {
+                        if let Err(e) = sender.send(&other).await {
+                            warn!("failed to send clipboard msg: {e}");
+                            break;
+                        }
+                    }
                 }
             }
+
 
             // Broadcast messages (e.g. TopologySync) to peer
             Ok(bmsg) = broadcast_rx.recv() => {

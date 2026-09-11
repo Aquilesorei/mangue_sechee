@@ -5,6 +5,7 @@ use manguesechee_core::events::InputEvent;
 use manguesechee_core::protocol::Message;
 use manguesechee_input::{KeyboardInjector, MouseInjector};
 use manguesechee_network::{transport::Transport, wrap};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
@@ -56,10 +57,18 @@ async fn handle(
 ) -> anyhow::Result<()> {
     let mut transport = wrap(stream);
 
-    // ── Identity ──────────────────────────────────────────────────────────────
-    let (_peer_name, peer_id) = match transport.receive().await? {
-        Message::Identity { name, id } => { info!("peer: name={name} id={id}"); (name, id) }
-        other => anyhow::bail!("expected Identity, got {other:?}"),
+    // ── Secondary data channel or control identity ────────────────────────────
+    let first_msg = transport.receive().await?;
+    let (_peer_name, peer_id) = match first_msg {
+        Message::FileChannelInit { transfer_id } => {
+            info!("incoming dedicated file channel from {peer_addr} (transfer {transfer_id})");
+            return crate::file_transfer::handle_incoming_file_channel(transport, transfer_id, ipc_state).await;
+        }
+        Message::Identity { name, id } => {
+            info!("peer: name={name} id={id}");
+            (name, id)
+        }
+        other => anyhow::bail!("expected Identity or FileChannelInit, got {other:?}"),
     };
     transport.send(&Message::Identity { name: local_name.clone(), id: local_id.clone() }).await?;
 
@@ -195,13 +204,16 @@ async fn handle(
         }
     });
 
+    let mut file_receiver = crate::file_transfer::FileReceiver::default();
+
     // Closure to process any message
     let handle_msg = |msg: Message,
-                      edge: &mut EdgeDetector,
-                      mouse: &mut MouseInjector,
-                      keyboard: &mut KeyboardInjector,
-                      has_control: &mut bool,
-                      out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
+                          edge: &mut EdgeDetector,
+                          mouse: &mut MouseInjector,
+                          keyboard: &mut KeyboardInjector,
+                          has_control: &mut bool,
+                          file_receiver: &mut crate::file_transfer::FileReceiver,
+                          out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
         match msg {
             Message::EdgeCrossed { edge: entry } => {
                 let return_edge = entry.opposite();
@@ -225,8 +237,27 @@ async fn handle(
                         if clipboard_enabled {
                             if let Some(text) = clipboard::get_text() {
                                 if !text.is_empty() {
-                                    info!("→ syncing clipboard on ReturnControl ({} bytes)", text.len());
-                                    let _ = out_tx.try_send(Message::ClipboardSync { text });
+                                    if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                                        let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                                        let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                                        let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                                        let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+
+                                        if total_size <= fast_limit {
+                                            let tid = uuid::Uuid::new_v4().to_string();
+                                            let tx_clone = out_tx.clone();
+                                            let state_clone = Arc::clone(&ipc_state);
+                                            tokio::spawn(async move {
+                                                let _ = crate::file_transfer::send_fast_transfer_to_channel(tid, files, disk_paths, total_size, &tx_clone, &state_clone).await;
+                                            });
+                                        } else if total_size <= bg_limit {
+                                            let peer_target = format!("{}:{}", peer_ip, 24800);
+                                            crate::file_transfer::spawn_background_sender(peer_target, files, disk_paths, total_size, Arc::clone(&ipc_state));
+                                        }
+                                    } else {
+                                        info!("→ syncing clipboard on ReturnControl ({} bytes)", text.len());
+                                        let _ = out_tx.try_send(Message::ClipboardSync { text });
+                                    }
                                 }
                             }
                         }
@@ -242,6 +273,19 @@ async fn handle(
                     | InputEvent::KeySync { .. }     => keyboard.inject(&event)?,
                 }
             }
+
+            Message::FileTransferOffer { transfer_id, files, total_size, is_background } => {
+                file_receiver.handle_offer(transfer_id, files, total_size, is_background, &ipc_state);
+            }
+
+            Message::FileTransferChunk { transfer_id, file_index, offset, data, is_last_chunk: _ } => {
+                file_receiver.handle_chunk(&transfer_id, file_index, offset, &data, &ipc_state);
+            }
+
+            Message::FileTransferDone { transfer_id } => {
+                file_receiver.handle_done(&transfer_id, &ipc_state);
+            }
+
 
             Message::ClipboardSync { text } => {
                 info!("← ClipboardSync ({} bytes)", text.len());
@@ -292,7 +336,7 @@ async fn handle(
 
     // Process initial message if captured during pairing resolution
     if let Some(msg) = initial_msg {
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
             return Ok(());
         }
     }
@@ -300,7 +344,7 @@ async fn handle(
     // ── Event loop ────────────────────────────────────────────────────────────
     loop {
         let msg = receiver.receive().await?;
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
             break;
         }
     }

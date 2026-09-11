@@ -38,6 +38,10 @@ pub enum AgentEvent {
         last_error:          Option<String>,
         topology_configured: bool,
         peers:               Vec<PeerInfo>,
+        #[serde(default)]
+        active_transfers:    Vec<FileTransferInfo>,
+        #[serde(default)]
+        transfer_history:    Vec<TransferHistoryEntry>,
     },
     Ok,
     Error { message: String },
@@ -51,3 +55,21 @@ pub struct PeerInfo {
     pub connected: bool,
     pub position:  String,
 }
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct FileTransferInfo {
+    pub transfer_id:       String,
+    pub filename:          String,
+    pub bytes_transferred: u64,
+    pub total_bytes:       u64,
+    pub is_receiving:      bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TransferHistoryEntry {
+    pub filename:     String,
+    pub total_bytes:  u64,
+    pub completed_at: String,
+    pub is_receiving: bool,
+}
+

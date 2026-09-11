@@ -89,13 +89,22 @@ impl Default for InputConfig {
 #[serde(default)]
 pub struct ClipboardConfig {
     pub enabled: bool,
+    pub files_enabled: bool,
+    pub fast_limit_mb: u32,
+    pub background_limit_mb: u32,
 }
 
 impl Default for ClipboardConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            files_enabled: true,
+            fast_limit_mb: 15,
+            background_limit_mb: 500,
+        }
     }
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

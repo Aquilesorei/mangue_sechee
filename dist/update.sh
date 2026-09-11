@@ -52,25 +52,26 @@ if ! command -v pkg-config &>/dev/null || ! pkg-config --exists fontconfig 2>/de
     fi
 fi
 
-# Ensure clipboard utilities (wl-clipboard & xclip) are installed
-if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null; then
-    echo "==> Ensuring clipboard utilities (wl-clipboard, xclip) are installed…"
+# Ensure clipboard & notification utilities (wl-clipboard, xclip, notify-send) are installed
+if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null || ! command -v notify-send &>/dev/null; then
+    echo "==> Ensuring clipboard & notification utilities are installed…"
     if command -v apt-get &>/dev/null; then
         if [[ "$EUID" -eq 0 ]]; then
             apt-get update -qq 2>/dev/null || true
-            apt-get install -y wl-clipboard xclip 2>/dev/null || true
+            apt-get install -y wl-clipboard xclip libnotify-bin 2>/dev/null || true
         else
             sudo apt-get update -qq 2>/dev/null || true
-            sudo apt-get install -y wl-clipboard xclip 2>/dev/null || true
+            sudo apt-get install -y wl-clipboard xclip libnotify-bin 2>/dev/null || true
         fi
     elif command -v dnf &>/dev/null; then
         if [[ "$EUID" -eq 0 ]]; then
-            dnf install -y wl-clipboard xclip 2>/dev/null || true
+            dnf install -y wl-clipboard xclip libnotify 2>/dev/null || true
         else
-            sudo dnf install -y wl-clipboard xclip 2>/dev/null || true
+            sudo dnf install -y wl-clipboard xclip libnotify 2>/dev/null || true
         fi
     fi
 fi
+
 
 echo "==> Building updated release binaries…"
 cd "$REPO_ROOT"

@@ -10,6 +10,21 @@ export struct PeerEntry {
     ping-status: string,
 }
 
+export struct TransferItem {
+    name:         string,
+    size-text:    string,
+    progress:     float,
+    status-text:  string,
+    is-receiving: bool,
+}
+
+export struct HistoryItem {
+    name:         string,
+    size-text:    string,
+    time-text:    string,
+    is-receiving: bool,
+}
+
 export enum AppView { Wizard, Connecting, Main }
 
 export component MainWindow inherits Window {
@@ -34,6 +49,8 @@ export component MainWindow inherits Window {
     in-out property <bool>        cursor-locked:      false;
     in-out property <[PeerEntry]> peers:              [];
     in-out property <[string]>    log-lines:          [];
+    in-out property <[TransferItem]> active-transfers: [];
+    in-out property <[HistoryItem]>  transfer-history: [];
     in-out property <string>      connected-peer:     "";
     in-out property <string>      connection-error:   "";
     in-out property <bool>        topology-configured: false;
@@ -215,6 +232,17 @@ export component MainWindow inherits Window {
 
                 Rectangle {
                     height: 38px; border-radius: 6px;
+                    background: root.active-tab == 4 ? #2b2d42 : transparent;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px;
+                        Text { text: "📁  Files"; font-size: 14px; font-weight: 600; color: root.active-tab == 4 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.active-tab = 4; } }
+                }
+
+
+                Rectangle {
+                    height: 38px; border-radius: 6px;
                     background: root.active-tab == 2 ? #2b2d42 : transparent;
                     HorizontalBox {
                         padding-left: 12px; padding-right: 12px;
@@ -283,10 +311,12 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.active-tab == 0 ? "Peers & Connections"
                                 : (root.active-tab == 1 ? "Screen Topology Layout"
-                                : (root.active-tab == 2 ? "System Settings" : "System Logs"));
+                                : (root.active-tab == 4 ? "File Transfers & History"
+                                : (root.active-tab == 2 ? "System Settings" : "System Logs")));
                             font-size: 17px; font-weight: 700; color: #e0e0ff;
                             vertical-alignment: center;
                         }
+
                         Rectangle { horizontal-stretch: 1; }
 
                         // Status Badge
@@ -664,6 +694,84 @@ export component MainWindow inherits Window {
 
                     if root.settings-feedback != "" : Text {
                         text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600;
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // TAB 4: FILE TRANSFERS & HISTORY
+                // ─────────────────────────────────────────────────────────────
+                if root.active-tab == 4 : ScrollView {
+                    vertical-stretch: 1;
+                    VerticalBox {
+                        spacing: 14px; padding-right: 10px;
+
+                        // Info banner
+                        Rectangle {
+                            background: #181926; border-radius: 8px; border-width: 1px; border-color: #2b2d42;
+                            HorizontalBox {
+                                padding: 12px; spacing: 12px;
+                                Text { text: "💡"; font-size: 18px; vertical-alignment: center; }
+                                VerticalBox {
+                                    spacing: 2px; horizontal-stretch: 1;
+                                    Text { text: "Seamless File Sharing"; font-size: 14px; font-weight: 700; color: #e0e0ff; }
+                                    Text {
+                                        text: "Copy files in any file manager (Nautilus, Dolphin, COSMIC Files), move your cursor across to the other machine, and paste with Ctrl+V.";
+                                        font-size: 12px; color: #9a9cb6; wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Active Transfers
+                        GroupBox {
+                            title: "Active Transfers";
+                            VerticalBox {
+                                spacing: 8px;
+                                for item[i] in root.active-transfers : Rectangle {
+                                    background: #181926; border-radius: 6px;
+                                    VerticalBox {
+                                        padding: 8px; spacing: 6px;
+                                        HorizontalBox {
+                                            spacing: 8px;
+                                            Text { text: item.is-receiving ? "⬇️" : "⬆️"; font-size: 14px; vertical-alignment: center; }
+                                            Text { text: item.name; font-size: 13px; font-weight: 600; color: #e0e0ff; horizontal-stretch: 1; vertical-alignment: center; }
+                                            Text { text: item.size-text; font-size: 12px; color: #9a9cb6; vertical-alignment: center; }
+                                            Text { text: item.status-text; font-size: 12px; font-weight: 600; color: #60a5fa; vertical-alignment: center; }
+                                        }
+                                        ProgressIndicator {
+                                            progress: item.progress;
+                                        }
+                                    }
+                                }
+                                if root.active-transfers.length == 0 : Text {
+                                    text: "No active transfers. Files transfer automatically when copied to clipboard.";
+                                    color: #555770; font-size: 13px; horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Transfer History
+                        GroupBox {
+                            title: "Recent Transfer History";
+                            VerticalBox {
+                                spacing: 6px;
+                                for entry[i] in root.transfer-history : Rectangle {
+                                    background: #181926; border-radius: 6px; height: 38px;
+                                    HorizontalBox {
+                                        padding-left: 10px; padding-right: 10px; spacing: 10px;
+                                        Text { text: entry.is-receiving ? "📥" : "📤"; font-size: 13px; vertical-alignment: center; }
+                                        Text { text: entry.name; font-size: 13px; font-weight: 500; color: #e0e0ff; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Text { text: entry.size-text; font-size: 12px; color: #9a9cb6; vertical-alignment: center; }
+                                        Text { text: entry.time-text; font-size: 11px; color: #555770; vertical-alignment: center; }
+                                    }
+                                }
+                                if root.transfer-history.length == 0 : Text {
+                                    text: "No transfer history yet.";
+                                    color: #555770; font-size: 13px; horizontal-alignment: center;
+                                }
+
+                            }
+                        }
                     }
                 }
 
