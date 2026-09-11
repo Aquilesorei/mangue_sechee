@@ -15,6 +15,7 @@ pub struct AgentState {
     pub cursor_locked:       bool,
     pub last_error:          Option<String>,
     pub topology_configured: bool,
+    pub disconnect_requested: bool,
     pub peers:               Vec<PeerInfo>,
     pub active_transfers:    Vec<manguesechee_core::ipc::FileTransferInfo>,
     pub transfer_history:    Vec<manguesechee_core::ipc::TransferHistoryEntry>,
@@ -106,14 +107,19 @@ fn handle_command(
         }
         GuiCommand::Connect { address } => {
             info!("IPC: connect requested to {address}");
-            state.lock().unwrap().last_error = None;
+            let mut s = state.lock().unwrap();
+            s.last_error = None;
+            s.disconnect_requested = false;
             let _ = connect_tx.send(address);
             AgentEvent::Ok
         }
         GuiCommand::Disconnect => {
+            info!("IPC: disconnect requested");
             let mut s = state.lock().unwrap();
             s.connected_to = None;
             s.topology_configured = false;
+            s.disconnect_requested = true;
+            let _ = broadcast_tx.send(manguesechee_core::protocol::Message::Goodbye);
             AgentEvent::Ok
         }
         GuiCommand::SetDiscovery { enabled } => {

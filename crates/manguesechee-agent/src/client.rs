@@ -477,9 +477,6 @@ pub async fn connect_to(
                                                         let tid = uuid::Uuid::new_v4().to_string();
                                                         if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
                                                             warn!("failed to send fast file transfer on EdgeCrossed: {e}");
-                                                            let _ = grab_mouse_tx.send(false);
-                                                            let _ = grab_keyboard_tx.send(false);
-                                                            break;
                                                         }
                                                     } else if total_size <= bg_limit {
                                                         crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
@@ -496,11 +493,24 @@ pub async fn connect_to(
                         }
                     }
                     ControllerState::Forwarding => {
-                        if let Err(e) = sender.send(&Message::InputEvent(event)).await {
-                            warn!("failed to send InputEvent to {addr}: {e} — ungrabbing");
-                            let _ = grab_mouse_tx.send(false);
-                            let _ = grab_keyboard_tx.send(false);
-                            break;
+                        let res = tokio::time::timeout(
+                            std::time::Duration::from_millis(500),
+                            sender.send(&Message::InputEvent(event)),
+                        ).await;
+                        match res {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                warn!("failed to send InputEvent to {addr}: {e} — ungrabbing");
+                                let _ = grab_mouse_tx.send(false);
+                                let _ = grab_keyboard_tx.send(false);
+                                break;
+                            }
+                            Err(_) => {
+                                warn!("timeout sending InputEvent to {addr} (peer likely offline) — ungrabbing");
+                                let _ = grab_mouse_tx.send(false);
+                                let _ = grab_keyboard_tx.send(false);
+                                break;
+                            }
                         }
                     }
                 }
@@ -515,11 +525,24 @@ pub async fn connect_to(
                     break;
                 }
                 missed_pings += 1;
-                if let Err(e) = sender.send(&Message::Ping).await {
-                    warn!("heartbeat ping to {addr} failed: {e} — ungrabbing and disconnecting");
-                    let _ = grab_mouse_tx.send(false);
-                    let _ = grab_keyboard_tx.send(false);
-                    break;
+                let ping_res = tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    sender.send(&Message::Ping),
+                ).await;
+                match ping_res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        warn!("heartbeat ping to {addr} failed: {e} — ungrabbing and disconnecting");
+                        let _ = grab_mouse_tx.send(false);
+                        let _ = grab_keyboard_tx.send(false);
+                        break;
+                    }
+                    Err(_) => {
+                        warn!("heartbeat ping to {addr} timed out — ungrabbing and disconnecting");
+                        let _ = grab_mouse_tx.send(false);
+                        let _ = grab_keyboard_tx.send(false);
+                        break;
+                    }
                 }
             }
 
@@ -537,9 +560,6 @@ pub async fn connect_to(
                                 let tid = uuid::Uuid::new_v4().to_string();
                                 if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
                                     warn!("failed to send fast file transfer: {e}");
-                                    let _ = grab_mouse_tx.send(false);
-                                    let _ = grab_keyboard_tx.send(false);
-                                    break;
                                 }
                             } else if total_size <= bg_limit {
                                 crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
@@ -564,8 +584,15 @@ pub async fn connect_to(
                 }
             }
 
-            // Broadcast messages (e.g. TopologySync) to peer
+            // Broadcast messages (e.g. TopologySync, Goodbye) to peer
             Ok(bmsg) = broadcast_rx.recv() => {
+                if matches!(bmsg, Message::Goodbye) {
+                    info!("broadcast Goodbye received — disconnecting from peer {addr}");
+                    let _ = grab_mouse_tx.send(false);
+                    let _ = grab_keyboard_tx.send(false);
+                    let _ = sender.send(&Message::Goodbye).await;
+                    break;
+                }
                 if let Err(e) = sender.send(&bmsg).await {
                     warn!("failed to send broadcast msg to peer: {e}");
                     let _ = grab_mouse_tx.send(false);

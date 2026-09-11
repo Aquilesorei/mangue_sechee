@@ -127,6 +127,20 @@ pub fn get_text() -> Option<String> {
             }
         }
 
+        // 1b. Wayland: Check GNOME / COSMIC Files copied files format
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .args(["-t", "x-special/gnome-copied-files", "--no-newline"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if !text.trim().is_empty() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+
         // Standard text via wl-paste
         if let Ok(output) = std::process::Command::new("wl-paste")
             .arg("--no-newline")
@@ -159,10 +173,23 @@ pub fn get_text() -> Option<String> {
         }
     }
 
-    // 3. X11 fallback via xclip: Prioritize text/uri-list if available
+    // 3. X11 fallback via xclip: Prioritize text/uri-list and gnome-copied-files if available
     if std::env::var("DISPLAY").is_ok() {
         if let Ok(output) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-t", "text/uri-list", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if !text.trim().is_empty() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "x-special/gnome-copied-files", "-o"])
             .output()
         {
             if output.status.success() && !output.stdout.is_empty() {
@@ -232,6 +259,7 @@ pub fn set_text(text: &str) -> anyhow::Result<()> {
 
     // 2. Wayland native fallback via wl-copy
     // wl-copy forks into background and retains the selection across app switches
+    let mut wayland_copied = false;
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
         if let Ok(mut child) = std::process::Command::new("wl-copy")
             .stdin(std::process::Stdio::piped())
@@ -243,14 +271,21 @@ pub fn set_text(text: &str) -> anyhow::Result<()> {
                 use std::io::Write;
                 let _ = stdin.write_all(text.as_bytes());
                 drop(stdin);
-                let _ = child.wait();
-                success = true;
+                if let Ok(st) = child.wait() {
+                    if st.success() {
+                        wayland_copied = true;
+                        success = true;
+                    }
+                }
             }
         }
     }
 
-    // 3. X11 fallback via xclip
-    if std::env::var("DISPLAY").is_ok() {
+    // 3. X11 fallback via xclip & xsel
+    // CRITICAL: On Wayland sessions with Xwayland, running both wl-copy and xclip
+    // simultaneously causes an Xwayland selection race that supersedes wl-copy.
+    // Only invoke xclip/xsel if Wayland is not active or wl-copy was not successful.
+    if !wayland_copied && std::env::var("DISPLAY").is_ok() {
         if let Ok(mut child) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard"])
             .stdin(std::process::Stdio::piped())
@@ -317,7 +352,7 @@ pub fn spawn_watcher(tx: mpsc::Sender<Message>) {
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_millis(750));
         }
     });
 }

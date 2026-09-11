@@ -14,10 +14,13 @@ fn syn() -> EvdevEvent {
     EvdevEvent::new(EventType::SYNCHRONIZATION, SYN_REPORT, 0)
 }
 
+use std::collections::HashSet;
+
 // ── MouseInjector ─────────────────────────────────────────────────────────────
 
 pub struct MouseInjector {
-    device: evdev::uinput::VirtualDevice,
+    device:       evdev::uinput::VirtualDevice,
+    held_buttons: HashSet<u16>,
 }
 
 impl MouseInjector {
@@ -43,7 +46,10 @@ impl MouseInjector {
             .with_relative_axes(&axes).context("set rel axes")?
             .build().context("build mouse device")?;
 
-        Ok(Self { device })
+        Ok(Self {
+            device,
+            held_buttons: HashSet::new(),
+        })
     }
 
     pub fn inject(&mut self, event: &InputEvent) -> anyhow::Result<()> {
@@ -64,6 +70,11 @@ impl MouseInjector {
                     MouseButton::Other(5) => Key::BTN_EXTRA.code(),
                     MouseButton::Other(_) => return Ok(()),
                 };
+                if *pressed {
+                    self.held_buttons.insert(code);
+                } else {
+                    self.held_buttons.remove(&code);
+                }
                 self.device.emit(&[
                     EvdevEvent::new(EventType::KEY, code, if *pressed { 1 } else { 0 }),
                     syn(),
@@ -83,11 +94,17 @@ impl MouseInjector {
 
     pub fn release_all(&mut self) -> anyhow::Result<()> {
         let mut evs: Vec<EvdevEvent> = Vec::new();
+        for &code in &self.held_buttons {
+            evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+        }
         for k in [Key::BTN_LEFT, Key::BTN_RIGHT, Key::BTN_MIDDLE, Key::BTN_SIDE, Key::BTN_EXTRA] {
-            evs.push(EvdevEvent::new(EventType::KEY, k.code(), 0));
+            if !self.held_buttons.contains(&k.code()) {
+                evs.push(EvdevEvent::new(EventType::KEY, k.code(), 0));
+            }
         }
         evs.push(syn());
         let _ = self.device.emit(&evs);
+        self.held_buttons.clear();
         Ok(())
     }
 }
@@ -101,7 +118,8 @@ impl Drop for MouseInjector {
 // ── KeyboardInjector ──────────────────────────────────────────────────────────
 
 pub struct KeyboardInjector {
-    device: evdev::uinput::VirtualDevice,
+    device:    evdev::uinput::VirtualDevice,
+    held_keys: HashSet<u16>,
 }
 
 impl KeyboardInjector {
@@ -121,31 +139,43 @@ impl KeyboardInjector {
             .with_keys(&keys).context("set keyboard keys")?
             .build().context("build keyboard device")?;
 
-        Ok(Self { device })
+        Ok(Self {
+            device,
+            held_keys: HashSet::new(),
+        })
     }
 
     pub fn inject(&mut self, event: &InputEvent) -> anyhow::Result<()> {
         match event {
             InputEvent::Key { key, pressed } => {
+                if *pressed {
+                    self.held_keys.insert(key.0);
+                } else {
+                    self.held_keys.remove(&key.0);
+                }
                 self.device.emit(&[
                     EvdevEvent::new(EventType::KEY, key.0, if *pressed { 1 } else { 0 }),
                     syn(),
                 ]).context("emit Key")?;
             }
             InputEvent::KeySync { pressed_keys } => {
-                // Release all keys, then press only those in pressed_keys.
-                // Simple approach: emit a release for each code in 0..=0x2ff,
-                // then press the ones that should be held.
-                // In practice this is only called once on connect so the cost is fine.
+                let target_set: HashSet<u16> = pressed_keys.iter().map(|k| k.0).collect();
                 let mut evs: Vec<EvdevEvent> = Vec::new();
-                for code in 0x00u16..=0x2ffu16 {
-                    evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+                for &code in &self.held_keys {
+                    if !target_set.contains(&code) {
+                        evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+                    }
                 }
-                for kc in pressed_keys {
-                    evs.push(EvdevEvent::new(EventType::KEY, kc.0, 1));
+                for &code in &target_set {
+                    if !self.held_keys.contains(&code) {
+                        evs.push(EvdevEvent::new(EventType::KEY, code, 1));
+                    }
                 }
-                evs.push(syn());
-                self.device.emit(&evs).context("emit KeySync")?;
+                if !evs.is_empty() {
+                    evs.push(syn());
+                    self.device.emit(&evs).context("emit KeySync")?;
+                }
+                self.held_keys = target_set;
             }
             _ => {}
         }
@@ -153,12 +183,15 @@ impl KeyboardInjector {
     }
 
     pub fn release_all(&mut self) -> anyhow::Result<()> {
-        let mut evs: Vec<EvdevEvent> = Vec::new();
-        for code in 0x00u16..=0x2ffu16 {
-            evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+        if !self.held_keys.is_empty() {
+            let mut evs: Vec<EvdevEvent> = Vec::with_capacity(self.held_keys.len() + 1);
+            for &code in &self.held_keys {
+                evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+            }
+            evs.push(syn());
+            let _ = self.device.emit(&evs);
+            self.held_keys.clear();
         }
-        evs.push(syn());
-        let _ = self.device.emit(&evs);
         Ok(())
     }
 }

@@ -198,6 +198,8 @@ pub fn set_file_clipboard(paths: &[PathBuf]) -> anyhow::Result<()> {
     crate::clipboard::mark_synced(&uri_list);
     let mut success = false;
 
+    let mut wayland_copied = false;
+
     // 1. Wayland wl-copy with text/uri-list
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
         if let Ok(mut child) = std::process::Command::new("wl-copy")
@@ -211,14 +213,23 @@ pub fn set_file_clipboard(paths: &[PathBuf]) -> anyhow::Result<()> {
                 use std::io::Write;
                 let _ = stdin.write_all(uri_list.as_bytes());
                 drop(stdin);
-                let _ = child.wait();
-                success = true;
+                if let Ok(st) = child.wait() {
+                    if st.success() {
+                        wayland_copied = true;
+                        success = true;
+                    }
+                }
             }
         }
     }
 
     // 2. X11 xclip with text/uri-list
-    if std::env::var("DISPLAY").is_ok() {
+    // CRITICAL: NEVER run xclip if wl-copy succeeded!
+    // In Wayland sessions with Xwayland (like Pop!_OS and Fedora), running xclip
+    // makes Xwayland claim the Wayland clipboard, terminating wl-copy and advertising
+    // text/plain to native Wayland apps, which causes COSMIC Files and Dolphin
+    // to paste a text file instead of the actual file!
+    if !wayland_copied && std::env::var("DISPLAY").is_ok() {
         if let Ok(mut child) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-t", "text/uri-list"])
             .stdin(std::process::Stdio::piped())
@@ -230,8 +241,11 @@ pub fn set_file_clipboard(paths: &[PathBuf]) -> anyhow::Result<()> {
                 use std::io::Write;
                 let _ = stdin.write_all(uri_list.as_bytes());
                 drop(stdin);
-                let _ = child.wait();
-                success = true;
+                if let Ok(st) = child.wait() {
+                    if st.success() {
+                        success = true;
+                    }
+                }
             }
         }
     }

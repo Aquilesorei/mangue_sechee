@@ -132,11 +132,13 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             while let Some(addr) = connect_rx.recv().await {
                 {
-                    let s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap();
                     if s.connected_to.as_deref() == Some(&addr) {
                         info!("already connected or connecting to {addr} — skipping duplicate connect");
                         continue;
                     }
+                    s.connected_to = Some(addr.clone());
+                    s.disconnect_requested = false;
                 }
                 let name = name.clone();
                 let id = id.clone();
@@ -148,17 +150,16 @@ async fn main() -> anyhow::Result<()> {
                 info!("Starting controller connection to {addr}");
 
                 tokio::spawn(async move {
-                    state.lock().unwrap().connected_to = Some(addr.clone());
                     if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, Arc::clone(&state), b_tx).await {
                         tracing::error!("controller session to {addr} failed: {e:#}");
                         state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
                     }
                     state.lock().unwrap().connected_to = None;
 
-                    // If still configured in peers, retry after 3 seconds
+                    // If still configured in peers, and disconnect wasn't explicitly requested, retry after 3 seconds
                     let should_retry = {
                         let s = state.lock().unwrap();
-                        s.peers.iter().any(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(&addr))
+                        !s.disconnect_requested && s.peers.iter().any(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(&addr))
                     };
                     if should_retry {
                         info!("will retry controller connection to {addr} in 3 seconds…");

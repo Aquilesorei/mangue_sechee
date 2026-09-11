@@ -91,6 +91,17 @@ impl TcpTransport {
                     &cnt as *const _ as *const libc::c_void,
                     std::mem::size_of_val(&cnt) as libc::socklen_t,
                 );
+                #[cfg(target_os = "linux")]
+                {
+                    let timeout: libc::c_uint = 3000; // 3 seconds timeout for unacknowledged TCP data
+                    libc::setsockopt(
+                        fd,
+                        libc::IPPROTO_TCP,
+                        libc::TCP_USER_TIMEOUT,
+                        &timeout as *const _ as *const libc::c_void,
+                        std::mem::size_of_val(&timeout) as libc::socklen_t,
+                    );
+                }
             }
         }
         Self { stream }

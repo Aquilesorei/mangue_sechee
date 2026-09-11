@@ -17,6 +17,22 @@ use crate::file_clipboard;
 use crate::ipc_server::SharedState;
 
 pub const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
+ 
+/// Sanitize relative paths to prevent directory traversal outside staging directory
+pub fn sanitize_relative_path(path_str: &str) -> PathBuf {
+    let p = std::path::Path::new(path_str);
+    let mut safe = PathBuf::new();
+    for comp in p.components() {
+        if let std::path::Component::Normal(c) = comp {
+            safe.push(c);
+        }
+    }
+    if safe.as_os_str().is_empty() {
+        PathBuf::from("unnamed_file")
+    } else {
+        safe
+    }
+}
 
 /// State tracking an in-flight file reception.
 pub struct ActiveReceiver {
@@ -44,15 +60,15 @@ impl ActiveReceiver {
         let mut open_files = Vec::with_capacity(files.len());
 
         for file in &files {
-            let dest = if let Some(ref rel) = file.relative_path {
-                let p = staging.join(rel);
-                if let Some(parent) = p.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                p
+            let safe_rel = if let Some(ref rel) = file.relative_path {
+                sanitize_relative_path(rel)
             } else {
-                staging.join(&file.filename)
+                sanitize_relative_path(&file.filename)
             };
+            let dest = staging.join(safe_rel);
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
 
             let f = OpenOptions::new()
                 .create(true)

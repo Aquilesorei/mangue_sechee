@@ -23,7 +23,9 @@ pub async fn run(
     connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
     broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
 ) {
-    info!("listening on {}", listener.local_addr().unwrap());
+    if let Ok(addr) = listener.local_addr() {
+        info!("listening on {addr}");
+    }
     loop {
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
@@ -209,7 +211,6 @@ async fn handle(
                                     let tid = uuid::Uuid::new_v4().to_string();
                                     if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state_for_send).await {
                                         warn!("send fast file transfer failed: {e}");
-                                        break;
                                     }
                                 } else if total_size <= bg_limit {
                                     crate::file_transfer::spawn_background_sender(peer_target_addr.clone(), files, disk_paths, total_size, Arc::clone(&ipc_state_for_send));
@@ -352,11 +353,29 @@ async fn handle(
 
     // ── Event loop ────────────────────────────────────────────────────────────
     loop {
-        let msg = match receiver.receive().await {
-            Ok(m) => m,
-            Err(e) => {
-                info!("peer connection closed: {e:#}");
-                break;
+        let msg = if has_control {
+            // When master has control of our screen, if master dies or disconnects abruptly,
+            // we must not hang waiting indefinitely for input events. Timeout after 5s.
+            match tokio::time::timeout(std::time::Duration::from_secs(5), receiver.receive()).await {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    info!("peer connection closed: {e:#}");
+                    break;
+                }
+                Err(_) => {
+                    warn!("timed out waiting for peer with active control — releasing virtual devices");
+                    let _ = mouse.release_all();
+                    let _ = keyboard.release_all();
+                    break;
+                }
+            }
+        } else {
+            match receiver.receive().await {
+                Ok(m) => m,
+                Err(e) => {
+                    info!("peer connection closed: {e:#}");
+                    break;
+                }
             }
         };
         if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
@@ -365,5 +384,7 @@ async fn handle(
     }
     let _ = mouse.release_all();
     let _ = keyboard.release_all();
+    // Allow compositor and kernel time to flush key-up and button-up events before device destruction
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     Ok(())
 }
