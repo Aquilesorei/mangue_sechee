@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         let h      = opts.screen_height;
         let deadzone = cfg.input.corner_deadzone_px;
         let delay    = cfg.input.switch_delay_ms;
+        let velocity = cfg.input.edge_velocity_threshold;
         let state  = Arc::clone(&ipc_state);
         let b_tx   = broadcast_tx.clone();
         let connect_tx_retry = connect_tx.clone();
@@ -150,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
                 info!("Starting controller connection to {addr}");
 
                 tokio::spawn(async move {
-                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, Arc::clone(&state), b_tx).await {
+                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, velocity, Arc::clone(&state), b_tx).await {
                         tracing::error!("controller session to {addr} failed: {e:#}");
                         state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
                     }

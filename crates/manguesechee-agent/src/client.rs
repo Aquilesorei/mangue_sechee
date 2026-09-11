@@ -46,17 +46,18 @@ impl Drop for PeerConnectedGuard {
 }
 
 pub async fn connect_to(
-    addr:          &str,
-    local_name:    String,
-    local_id:      String,
-    mouse_path:    Option<PathBuf>,
-    keyboard_path: Option<PathBuf>,
-    screen_width:  u32,
-    screen_height: u32,
-    deadzone_px:   u32,
-    delay_ms:      u32,
-    ipc_state:     crate::ipc_server::SharedState,
-    broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
+    addr:               &str,
+    local_name:         String,
+    local_id:           String,
+    mouse_path:         Option<PathBuf>,
+    keyboard_path:      Option<PathBuf>,
+    screen_width:       u32,
+    screen_height:      u32,
+    deadzone_px:        u32,
+    delay_ms:           u32,
+    velocity_threshold: u32,
+    ipc_state:          crate::ipc_server::SharedState,
+    broadcast_tx:       tokio::sync::broadcast::Sender<Message>,
 ) -> anyhow::Result<()> {
     info!("connecting to {addr}  (screen {screen_width}×{screen_height})");
     let mut transport = connect(addr).await?;
@@ -365,7 +366,7 @@ pub async fn connect_to(
     let mut state = ControllerState::Local;
     let initial_locked = ipc_state.lock().unwrap().cursor_locked;
     let mut edge = EdgeDetector::new(screen_width, screen_height)
-        .with_settings(deadzone_px, delay_ms, initial_locked);
+        .with_settings(deadzone_px, delay_ms, initial_locked, velocity_threshold);
     let mut broadcast_rx = broadcast_tx.subscribe();
     let mut missed_pings: u32 = 0;
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -376,7 +377,7 @@ pub async fn connect_to(
     let mut lalt_held = false;
     let mut ralt_held = false;
 
-    info!("ready — move cursor to screen edge to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms)");
+    info!("ready — move cursor to screen edge to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms, velocity_thresh={velocity_threshold}px)");
 
     loop {
         // Sync dynamic cursor lock from GUI / IPC

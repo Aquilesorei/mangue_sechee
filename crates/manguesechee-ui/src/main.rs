@@ -158,6 +158,9 @@ fn main() -> anyhow::Result<()> {
             if let Ok(deadzone) = w.get_setting_deadzone().trim().parse::<u32>() {
                 cfg.input.corner_deadzone_px = deadzone;
             }
+            if let Ok(velocity) = w.get_setting_velocity().trim().parse::<u32>() {
+                cfg.input.edge_velocity_threshold = velocity;
+            }
             let cursor_lock = w.get_cursor_locked();
             cfg.input.cursor_locked = cursor_lock;
             send_ipc(ipc::GuiCommand::SetCursorLock { locked: cursor_lock });
@@ -676,6 +679,7 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_setting_height(cfg.screen.height.to_string().into());
     w.set_setting_switch_delay(cfg.input.switch_delay_ms.to_string().into());
     w.set_setting_deadzone(cfg.input.corner_deadzone_px.to_string().into());
+    w.set_setting_velocity(cfg.input.edge_velocity_threshold.to_string().into());
     w.set_cursor_locked(cfg.input.cursor_locked);
 
     // Role: 0=Both, 1=Controller, 2=Peer

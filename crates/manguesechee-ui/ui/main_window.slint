@@ -73,6 +73,7 @@ export component MainWindow inherits Window {
     in-out property <string>      setting-height:       "1080";
     in-out property <string>      setting-switch-delay: "0";
     in-out property <string>      setting-deadzone:     "50";
+    in-out property <string>      setting-velocity:     "20";
     in-out property <string>      setting-peer-addr:    "";
     in-out property <string>      setting-peer-pos:     "right";
     in-out property <string>      settings-feedback:    "";
@@ -838,9 +839,15 @@ export component MainWindow inherits Window {
                                 spacing: 10px;
                                 HorizontalBox {
                                     spacing: 10px;
+                                    Text { text: "Flick Velocity (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                                    LineEdit { text <=> root.setting-velocity; width: 80px; }
+                                    Text { text: "(Fast flick speed to jump; 0 = disabled, 20 = recommended)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                                }
+                                HorizontalBox {
+                                    spacing: 10px;
                                     Text { text: "Dwell Delay (ms):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
                                     LineEdit { text <=> root.setting-switch-delay; width: 80px; }
-                                    Text { text: "(0 = instant, 150 = recommended dwell time)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                                    Text { text: "(Hold cursor at edge to switch; 0 = flick only, 150 = recommended dwell)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
                                 }
                                 HorizontalBox {
                                     spacing: 10px;

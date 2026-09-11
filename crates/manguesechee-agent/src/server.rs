@@ -182,7 +182,14 @@ async fn handle(
     };
     info!("virtual mouse + keyboard ready");
 
-    let mut edge = EdgeDetector::new(screen_width, screen_height);
+    let cfg_input = manguesechee_core::config::load().map(|c| c.input).unwrap_or_default();
+    let mut edge = EdgeDetector::new(screen_width, screen_height)
+        .with_settings(
+            cfg_input.corner_deadzone_px,
+            cfg_input.switch_delay_ms,
+            false,
+            cfg_input.edge_velocity_threshold,
+        );
     let mut has_control = false;
 
     // Outbound channel — ReturnControl, Pong, and broadcast messages go here
