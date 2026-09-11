@@ -137,6 +137,10 @@ pub async fn connect_to(
 
     let (mut sender, mut receiver) = transport.into_split();
 
+    let initial_files_allowed = ipc_state.lock().unwrap().file_transfer_enabled;
+    let _ = sender.send(&Message::FileTransferStatus { enabled: initial_files_allowed }).await;
+    let peer_files_enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
     // ── Devices ───────────────────────────────────────────────────────────────
     let mouse_paths: Vec<PathBuf> = if let Some(p) = mouse_path {
         vec![p]
@@ -264,6 +268,7 @@ pub async fn connect_to(
     // ── ReturnControl & Message listener ─────────────────────────────────────
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundSignal>(32);
     let state_for_recv = Arc::clone(&ipc_state);
+    let peer_files_recv = Arc::clone(&peer_files_enabled);
     let peer_addr_str = addr.to_string();
     let grab_mouse_cleanup = grab_mouse_tx.clone();
     let grab_keyboard_cleanup = grab_keyboard_tx.clone();
@@ -272,12 +277,20 @@ pub async fn connect_to(
         let mut file_receiver = crate::file_transfer::FileReceiver::default();
         loop {
             match receiver.receive().await {
+                Ok(Message::FileTransferStatus { enabled }) => {
+                    info!("← peer updated FileTransferStatus: enabled={enabled}");
+                    peer_files_recv.store(enabled, std::sync::atomic::Ordering::SeqCst);
+                }
                 Ok(Message::ReturnControl { edge }) => {
                     info!("← ReturnControl ({edge:?})");
                     let _ = inbound_tx_task.send(InboundSignal::ReturnControl).await;
                 }
                 Ok(Message::FileTransferOffer { transfer_id, files, total_size, is_background }) => {
-                    file_receiver.handle_offer(transfer_id, files, total_size, is_background, &state_for_recv);
+                    if state_for_recv.lock().unwrap().file_transfer_enabled {
+                        file_receiver.handle_offer(transfer_id, files, total_size, is_background, &state_for_recv);
+                    } else {
+                        warn!("incoming file transfer offer {transfer_id} ignored — file transfer disabled");
+                    }
                 }
                 Ok(Message::FileTransferChunk { transfer_id, file_index, offset, data, is_last_chunk: _ }) => {
                     file_receiver.handle_chunk(&transfer_id, file_index, offset, &data, &state_for_recv);
@@ -468,21 +481,32 @@ pub async fn connect_to(
                                         if let Some(text) = clipboard::get_text() {
                                             if !text.is_empty() && !clipboard::is_already_synced(&text) {
                                                 clipboard::mark_synced(&text);
-                                                if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
-                                                    let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
-                                                    let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
-                                                    let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
-                                                    let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+                                                let local_allowed = ipc_state.lock().unwrap().file_transfer_enabled;
+                                                let peer_allowed = peer_files_enabled.load(std::sync::atomic::Ordering::SeqCst);
+                                                let files_allowed = local_allowed && peer_allowed;
+                                                if !peer_allowed && crate::file_clipboard::parse_clipboard_file_uris(&text).is_some() {
+                                                    info!("→ skipping file transfer on EdgeCrossed: peer has file transfer disabled");
+                                                }
+                                                if files_allowed {
+                                                    if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                                                        let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                                                        let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                                                        let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                                                        let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
 
-                                                    if total_size <= fast_limit {
-                                                        let tid = uuid::Uuid::new_v4().to_string();
-                                                        if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
-                                                            warn!("failed to send fast file transfer on EdgeCrossed: {e}");
+                                                        if total_size <= fast_limit {
+                                                            let tid = uuid::Uuid::new_v4().to_string();
+                                                            if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
+                                                                warn!("failed to send fast file transfer on EdgeCrossed: {e}");
+                                                            }
+                                                        } else if total_size <= bg_limit {
+                                                            crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
                                                         }
-                                                    } else if total_size <= bg_limit {
-                                                        crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
+                                                    } else {
+                                                        info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
+                                                        let _ = sender.send(&Message::ClipboardSync { text }).await;
                                                     }
-                                                } else {
+                                                } else if crate::file_clipboard::parse_clipboard_file_uris(&text).is_none() {
                                                     info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
                                                     let _ = sender.send(&Message::ClipboardSync { text }).await;
                                                 }
@@ -551,21 +575,36 @@ pub async fn connect_to(
             Some(clip_msg) = clip_msg_rx.recv() => {
                 match clip_msg {
                     Message::ClipboardSync { text } => {
-                        if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
-                            let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
-                            let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
-                            let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
-                            let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+                        let local_allowed = ipc_state.lock().unwrap().file_transfer_enabled;
+                        let peer_allowed = peer_files_enabled.load(std::sync::atomic::Ordering::SeqCst);
+                        let files_allowed = local_allowed && peer_allowed;
+                        if !peer_allowed && crate::file_clipboard::parse_clipboard_file_uris(&text).is_some() {
+                            info!("→ skipping file transfer: peer has file transfer disabled");
+                        }
+                        if files_allowed {
+                            if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                                let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                                let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                                let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                                let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
 
-                            if total_size <= fast_limit {
-                                let tid = uuid::Uuid::new_v4().to_string();
-                                if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
-                                    warn!("failed to send fast file transfer: {e}");
+                                if total_size <= fast_limit {
+                                    let tid = uuid::Uuid::new_v4().to_string();
+                                    if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
+                                        warn!("failed to send fast file transfer: {e}");
+                                    }
+                                } else if total_size <= bg_limit {
+                                    crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
                                 }
-                            } else if total_size <= bg_limit {
-                                crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
+                            } else {
+                                if let Err(e) = sender.send(&Message::ClipboardSync { text }).await {
+                                    warn!("failed to send clipboard sync: {e}");
+                                    let _ = grab_mouse_tx.send(false);
+                                    let _ = grab_keyboard_tx.send(false);
+                                    break;
+                                }
                             }
-                        } else {
+                        } else if crate::file_clipboard::parse_clipboard_file_uris(&text).is_none() {
                             if let Err(e) = sender.send(&Message::ClipboardSync { text }).await {
                                 warn!("failed to send clipboard sync: {e}");
                                 let _ = grab_mouse_tx.send(false);

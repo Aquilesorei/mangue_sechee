@@ -77,6 +77,9 @@ pub enum Message {
     TopologySync { position: String },
 
     // ── Phase 8 — File Transfer ───────────────────────────────────────────────
+    /// Informs the peer whether local file transfers are enabled or disabled.
+    FileTransferStatus { enabled: bool },
+
     /// Connection handshake for dedicated secondary data channel
     FileChannelInit { transfer_id: String },
 

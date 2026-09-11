@@ -14,6 +14,10 @@ pub fn runtime_dir() -> PathBuf {
 pub fn pid_file()    -> PathBuf { runtime_dir().join("agent.pid")  }
 pub fn socket_path() -> PathBuf { runtime_dir().join("agent.sock") }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "cmd")]
 pub enum GuiCommand {
@@ -21,6 +25,7 @@ pub enum GuiCommand {
     Connect   { address: String },
     Disconnect,
     SetDiscovery { enabled: bool },
+    SetFileTransfer { enabled: bool },
     SetCursorLock { locked: bool },
     ForgetPeer { address: String },
     SyncTopology { address: String, position: String },
@@ -31,17 +36,19 @@ pub enum GuiCommand {
 #[serde(tag = "type")]
 pub enum AgentEvent {
     Status {
-        local_name:          String,
-        connected_to:        Option<String>,
-        discovery:           bool,
-        cursor_locked:       bool,
-        last_error:          Option<String>,
-        topology_configured: bool,
-        peers:               Vec<PeerInfo>,
+        local_name:            String,
+        connected_to:          Option<String>,
+        discovery:             bool,
+        #[serde(default = "default_true")]
+        file_transfer_enabled: bool,
+        cursor_locked:         bool,
+        last_error:            Option<String>,
+        topology_configured:   bool,
+        peers:                 Vec<PeerInfo>,
         #[serde(default)]
-        active_transfers:    Vec<FileTransferInfo>,
+        active_transfers:      Vec<FileTransferInfo>,
         #[serde(default)]
-        transfer_history:    Vec<TransferHistoryEntry>,
+        transfer_history:      Vec<TransferHistoryEntry>,
     },
     Ok,
     Error { message: String },

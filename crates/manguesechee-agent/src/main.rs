@@ -79,9 +79,10 @@ async fn main() -> anyhow::Result<()> {
 
     let ipc_state: ipc_server::SharedState = Arc::new(std::sync::Mutex::new(
         ipc_server::AgentState {
-            local_name: local_name.clone(),
-            discovery:  cfg.network.discovery,
-            peers:      initial_peers,
+            local_name:            local_name.clone(),
+            discovery:             cfg.network.discovery,
+            file_transfer_enabled: cfg.clipboard.files_enabled,
+            peers:                 initial_peers,
             ..Default::default()
         }
     ));

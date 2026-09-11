@@ -142,6 +142,7 @@ fn main() -> anyhow::Result<()> {
             // Discovery & Clipboard
             cfg.network.discovery = w.get_setting_discovery();
             cfg.clipboard.enabled = w.get_setting_clipboard();
+            cfg.clipboard.files_enabled = w.get_setting_file_transfer();
 
             // Screen Dimensions
             if let Ok(width) = w.get_setting_width().trim().parse::<u32>() {
@@ -509,6 +510,19 @@ fn main() -> anyhow::Result<()> {
     window.on_toggle_discovery(move |enabled| {
         send_ipc(ipc::GuiCommand::SetDiscovery { enabled });
     });
+    {
+        let w = window.as_weak();
+        window.on_toggle_file_transfer(move |enabled| {
+            send_ipc(ipc::GuiCommand::SetFileTransfer { enabled });
+            if let Ok(mut cfg) = config::load() {
+                cfg.clipboard.files_enabled = enabled;
+                let _ = config::save(&cfg);
+            }
+            if let Some(w) = w.upgrade() {
+                w.set_setting_file_transfer(enabled);
+            }
+        });
+    }
 
     // ── Background Polling Timer (Every 2s) ──────────────────────────────────
     let _poll_timer = {
@@ -531,11 +545,12 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history,
+                    local_name, connected_to, discovery, file_transfer_enabled, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history,
                 }) = poll_status()
                 {
                     w.set_local_name(local_name.into());
                     w.set_discovery(discovery);
+                    w.set_setting_file_transfer(file_transfer_enabled);
                     w.set_cursor_locked(cursor_locked);
                     w.set_status(match &connected_to {
                         Some(p) => format!("Forwarding → {p}").into(),
@@ -674,6 +689,7 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_setting_port(cfg.network.port.to_string().into());
     w.set_setting_discovery(cfg.network.discovery);
     w.set_setting_clipboard(cfg.clipboard.enabled);
+    w.set_setting_file_transfer(cfg.clipboard.files_enabled);
     w.set_setting_autostart(is_autostart_enabled());
     w.set_setting_width(cfg.screen.width.to_string().into());
     w.set_setting_height(cfg.screen.height.to_string().into());

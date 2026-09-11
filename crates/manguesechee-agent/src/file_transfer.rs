@@ -515,6 +515,10 @@ pub async fn handle_incoming_file_channel(
     init_transfer_id: String,
     ipc_state: SharedState,
 ) -> anyhow::Result<()> {
+    if !ipc_state.lock().unwrap().file_transfer_enabled {
+        warn!("incoming file channel for transfer {init_transfer_id} rejected — file transfer disabled");
+        return Ok(());
+    }
     let mut receiver = FileReceiver::default();
 
     loop {

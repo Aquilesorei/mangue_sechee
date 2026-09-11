@@ -7,18 +7,37 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AgentState {
-    pub local_name:          String,
-    pub connected_to:        Option<String>,
-    pub discovery:           bool,
-    pub cursor_locked:       bool,
-    pub last_error:          Option<String>,
-    pub topology_configured: bool,
-    pub disconnect_requested: bool,
-    pub peers:               Vec<PeerInfo>,
-    pub active_transfers:    Vec<manguesechee_core::ipc::FileTransferInfo>,
-    pub transfer_history:    Vec<manguesechee_core::ipc::TransferHistoryEntry>,
+    pub local_name:            String,
+    pub connected_to:          Option<String>,
+    pub discovery:             bool,
+    pub file_transfer_enabled: bool,
+    pub cursor_locked:         bool,
+    pub last_error:            Option<String>,
+    pub topology_configured:   bool,
+    pub disconnect_requested:  bool,
+    pub peers:                 Vec<PeerInfo>,
+    pub active_transfers:      Vec<manguesechee_core::ipc::FileTransferInfo>,
+    pub transfer_history:      Vec<manguesechee_core::ipc::TransferHistoryEntry>,
+}
+
+impl Default for AgentState {
+    fn default() -> Self {
+        Self {
+            local_name:            String::new(),
+            connected_to:          None,
+            discovery:             true,
+            file_transfer_enabled: true,
+            cursor_locked:         false,
+            last_error:            None,
+            topology_configured:   false,
+            disconnect_requested:  false,
+            peers:                 Vec::new(),
+            active_transfers:      Vec::new(),
+            transfer_history:      Vec::new(),
+        }
+    }
 }
 
 pub type SharedState = Arc<Mutex<AgentState>>;
@@ -94,15 +113,16 @@ fn handle_command(
         GuiCommand::GetStatus => {
             let s = state.lock().unwrap();
             AgentEvent::Status {
-                local_name:          s.local_name.clone(),
-                connected_to:        s.connected_to.clone(),
-                discovery:           s.discovery,
-                cursor_locked:       s.cursor_locked,
-                last_error:          s.last_error.clone(),
-                topology_configured: s.topology_configured,
-                peers:               s.peers.clone(),
-                active_transfers:    s.active_transfers.clone(),
-                transfer_history:    s.transfer_history.clone(),
+                local_name:            s.local_name.clone(),
+                connected_to:          s.connected_to.clone(),
+                discovery:             s.discovery,
+                file_transfer_enabled: s.file_transfer_enabled,
+                cursor_locked:         s.cursor_locked,
+                last_error:            s.last_error.clone(),
+                topology_configured:   s.topology_configured,
+                peers:                 s.peers.clone(),
+                active_transfers:      s.active_transfers.clone(),
+                transfer_history:      s.transfer_history.clone(),
             }
         }
         GuiCommand::Connect { address } => {
@@ -124,6 +144,17 @@ fn handle_command(
         }
         GuiCommand::SetDiscovery { enabled } => {
             state.lock().unwrap().discovery = enabled;
+            AgentEvent::Ok
+        }
+        GuiCommand::SetFileTransfer { enabled } => {
+            info!("IPC: set file transfer = {enabled}");
+            let mut s = state.lock().unwrap();
+            s.file_transfer_enabled = enabled;
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                cfg.clipboard.files_enabled = enabled;
+                let _ = manguesechee_core::config::save(&cfg);
+            }
+            let _ = broadcast_tx.send(manguesechee_core::protocol::Message::FileTransferStatus { enabled });
             AgentEvent::Ok
         }
         GuiCommand::SetCursorLock { locked } => {
