@@ -23,11 +23,15 @@ pub struct MouseCapture {
 
     // Touchpad (pavé tactile) tracking state
     is_touchpad:          bool,
+    slots:                [Option<i32>; 16],
+    active_slot:          usize,
+    btn_touch:            bool,
     touch_active:         bool,
+    pending_grab:         bool,
+    pending_grab_since:   Option<Instant>,
     pending_ungrab:       bool,
     pending_ungrab_since: Option<Instant>,
     finger_count:         u8,
-    active_slot:          usize,
     cur_x:                Option<i32>,
     cur_y:                Option<i32>,
     last_x:               Option<i32>,
@@ -50,11 +54,15 @@ impl MouseCapture {
             pending_scroll_y: 0.0,
             is_grabbed: false,
             is_touchpad,
+            slots: [None; 16],
+            active_slot: 0,
+            btn_touch: false,
             touch_active: false,
+            pending_grab: false,
+            pending_grab_since: None,
             pending_ungrab: false,
             pending_ungrab_since: None,
             finger_count: 0,
-            active_slot: 0,
             cur_x: None,
             cur_y: None,
             last_x: None,
@@ -67,18 +75,31 @@ impl MouseCapture {
         self.pending_ungrab = false;
         self.pending_ungrab_since = None;
         if !self.is_grabbed {
-            self.stream.device_mut().grab()?;
-            self.is_grabbed = true;
-            info!("pointer/touchpad grabbed");
+            if self.is_touchpad && self.touch_active {
+                // If a touch contact is in progress on local screen, defer grabbing
+                // until finger liftoff so KWin/libinput receives a clean touch release
+                // without getting confused by orphaned contacts / double tracking IDs.
+                self.pending_grab = true;
+                self.pending_grab_since = Some(Instant::now());
+                info!("touchpad grab deferred until finger liftoff");
+            } else {
+                self.stream.device_mut().grab()?;
+                self.is_grabbed = true;
+                self.pending_grab = false;
+                self.pending_grab_since = None;
+                info!("pointer/touchpad grabbed");
+            }
         }
         Ok(())
     }
 
     /// Release the exclusive grab — local compositor sees events again.
     /// For touchpads, if a touch is actively in progress, we defer ungrabbing
-    /// until the finger is lifted to prevent sending an orphan touch-up event to KWin/libinput,
-    /// which would cause a "double tracking ID -1" bug and disable the device.
+    /// until the finger is lifted so KWin/libinput does not receive mid-gesture contact
+    /// or duplicate tracking IDs.
     pub fn ungrab(&mut self) -> anyhow::Result<()> {
+        self.pending_grab = false;
+        self.pending_grab_since = None;
         if self.is_grabbed {
             if self.is_touchpad && self.touch_active {
                 self.pending_ungrab = true;
@@ -95,64 +116,151 @@ impl MouseCapture {
         Ok(())
     }
 
+    /// Immediately ungrab without deferring, even if touchpad is active.
+    /// Used on disconnect, shutdown, or drop.
+    pub fn force_ungrab(&mut self) -> anyhow::Result<()> {
+        self.pending_grab = false;
+        self.pending_grab_since = None;
+        self.pending_ungrab = false;
+        self.pending_ungrab_since = None;
+        if self.is_grabbed {
+            let _ = self.stream.device_mut().ungrab();
+            self.is_grabbed = false;
+            info!("pointer/touchpad force ungrabbed");
+        }
+        Ok(())
+    }
+
     pub async fn next_event(&mut self) -> anyhow::Result<InputEvent> {
         loop {
-            // Check if deferred ungrab timed out even if no new hardware events arrive
+            // Check if deferred ungrab or grab reached liftoff or timed out
             if self.pending_ungrab {
-                let timed_out = self.pending_ungrab_since.map_or(false, |t| t.elapsed() > Duration::from_millis(250));
+                let timed_out = self.pending_ungrab_since.map_or(false, |t| t.elapsed() > Duration::from_millis(300));
                 if !self.touch_active || timed_out {
                     let _ = self.stream.device_mut().ungrab();
                     self.is_grabbed = false;
                     self.pending_ungrab = false;
                     self.pending_ungrab_since = None;
+                    self.pending_dx = 0;
+                    self.pending_dy = 0;
+                    self.pending_scroll_x = 0.0;
+                    self.pending_scroll_y = 0.0;
                     info!("deferred touchpad ungrab executed (touch_active={}, timed_out={})", self.touch_active, timed_out);
+                }
+            } else if self.pending_grab {
+                let timed_out = self.pending_grab_since.map_or(false, |t| t.elapsed() > Duration::from_millis(300));
+                if !self.touch_active || timed_out {
+                    let _ = self.stream.device_mut().grab();
+                    self.is_grabbed = true;
+                    self.pending_grab = false;
+                    self.pending_grab_since = None;
+                    self.pending_dx = 0;
+                    self.pending_dy = 0;
+                    self.pending_scroll_x = 0.0;
+                    self.pending_scroll_y = 0.0;
+                    info!("deferred touchpad grab executed (touch_active={}, timed_out={})", self.touch_active, timed_out);
                 }
             }
 
-            // Flush any pending scroll events
-            if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
-                let sx = if self.pending_scroll_x.abs() >= 1.0 {
-                    let s = self.pending_scroll_x.trunc();
-                    self.pending_scroll_x -= s;
-                    s
-                } else {
-                    0.0
-                };
-                let sy = if self.pending_scroll_y.abs() >= 1.0 {
-                    let s = self.pending_scroll_y.trunc();
-                    self.pending_scroll_y -= s;
-                    s
-                } else {
-                    0.0
-                };
-                return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
-            }
+            // Flush any pending scroll events (only when not in transition)
+            if !self.pending_grab && !self.pending_ungrab {
+                if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
+                    let sx = if self.pending_scroll_x.abs() >= 1.0 {
+                        let s = self.pending_scroll_x.trunc();
+                        self.pending_scroll_x -= s;
+                        s
+                    } else {
+                        0.0
+                    };
+                    let sy = if self.pending_scroll_y.abs() >= 1.0 {
+                        let s = self.pending_scroll_y.trunc();
+                        self.pending_scroll_y -= s;
+                        s
+                    } else {
+                        0.0
+                    };
+                    return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
+                }
 
-            // Flush any pending mouse movement events
-            if self.pending_dx != 0 || self.pending_dy != 0 {
-                let e = InputEvent::MouseMove {
-                    dx: self.pending_dx,
-                    dy: self.pending_dy,
-                };
+                // Flush any pending mouse movement events
+                if self.pending_dx != 0 || self.pending_dy != 0 {
+                    let e = InputEvent::MouseMove {
+                        dx: self.pending_dx,
+                        dy: self.pending_dy,
+                    };
+                    self.pending_dx = 0;
+                    self.pending_dy = 0;
+                    return Ok(e);
+                }
+            } else {
+                // In transition — drop pending deltas
                 self.pending_dx = 0;
                 self.pending_dy = 0;
-                return Ok(e);
+                self.pending_scroll_x = 0.0;
+                self.pending_scroll_y = 0.0;
             }
 
-            let ev = self.stream.next_event().await?;
+            // Await next hardware event, with timeout if a grab/ungrab is pending
+            let ev = if self.pending_ungrab || self.pending_grab {
+                match tokio::time::timeout(Duration::from_millis(300), self.stream.next_event()).await {
+                    Ok(Ok(ev)) => ev,
+                    Ok(Err(e)) => return Err(e.into()),
+                    Err(_) => {
+                        // Timeout fired without hardware event — force transition
+                        if self.pending_ungrab {
+                            let _ = self.stream.device_mut().ungrab();
+                            self.is_grabbed = false;
+                            self.pending_ungrab = false;
+                            self.pending_ungrab_since = None;
+                            info!("touchpad pending ungrab timed out — forced ungrab");
+                        } else if self.pending_grab {
+                            let _ = self.stream.device_mut().grab();
+                            self.is_grabbed = true;
+                            self.pending_grab = false;
+                            self.pending_grab_since = None;
+                            info!("touchpad pending grab timed out — forced grab");
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                self.stream.next_event().await?
+            };
+
             match ev.kind() {
                 InputEventKind::Synchronization(_) => {
-                    // Check if deferred ungrab is pending and finger is lifted
+                    // Update touch_active status across all slots and btn_touch
+                    let any_slot = self.slots.iter().any(|s| s.is_some());
+                    self.touch_active = any_slot || self.btn_touch;
+                    if !self.touch_active {
+                        self.cur_x = None;
+                        self.cur_y = None;
+                        self.last_x = None;
+                        self.last_y = None;
+                        self.finger_count = 0;
+                    }
+
+                    // Check if deferred ungrab or grab reached liftoff
                     if self.pending_ungrab && !self.touch_active {
                         let _ = self.stream.device_mut().ungrab();
                         self.is_grabbed = false;
                         self.pending_ungrab = false;
                         self.pending_ungrab_since = None;
+                        self.pending_dx = 0;
+                        self.pending_dy = 0;
                         info!("deferred touchpad ungrab executed upon finger release");
+                    } else if self.pending_grab && !self.touch_active {
+                        let _ = self.stream.device_mut().grab();
+                        self.is_grabbed = true;
+                        self.pending_grab = false;
+                        self.pending_grab_since = None;
+                        self.pending_dx = 0;
+                        self.pending_dy = 0;
+                        info!("deferred touchpad grab executed upon finger release");
                     }
 
-                    // Compute touchpad movement / scroll deltas
-                    if self.touch_active {
+                    // Compute touchpad movement / scroll deltas (only if not pending transition)
+                    if !self.pending_grab && !self.pending_ungrab && self.touch_active {
                         if let (Some(cx), Some(cy)) = (self.cur_x, self.cur_y) {
                             if let (Some(lx), Some(ly)) = (self.last_x, self.last_y) {
                                 let dx = cx - lx;
@@ -160,17 +268,15 @@ impl MouseCapture {
 
                                 if dx != 0 || dy != 0 {
                                     if self.finger_count >= 2 {
-                                        // Two-finger scroll: accumulate scroll
-                                        // In standard evdev coordinates, y increases downward.
-                                        // Moving fingers down (dy > 0) scrolls down (negative delta in wheel ticks).
+                                        // Two-finger scroll
                                         self.pending_scroll_y -= (dy as f32) / 16.0;
                                         self.pending_scroll_x -= (dx as f32) / 16.0;
                                     } else {
                                         // Single-finger: pointer movement
-                                        // Raw touchpad units are ~12 counts/mm (~300 DPI) vs standard mouse (1200-1600 DPI).
-                                        // Scale by 2.5x to match screen resolution and allow smooth edge crossings.
+                                        // Raw touchpad units are ~12 counts/mm (~300 DPI) vs mouse (1200-1600 DPI).
+                                        // Scale by 2.0x for smooth, predictable edge crossings.
                                         let (scaled_dx, scaled_dy) = if self.is_touchpad {
-                                            ((dx as f32 * 2.5).round() as i32, (dy as f32 * 2.5).round() as i32)
+                                            ((dx as f32 * 2.0).round() as i32, (dy as f32 * 2.0).round() as i32)
                                         } else {
                                             (dx, dy)
                                         };
@@ -184,80 +290,88 @@ impl MouseCapture {
                         }
                     }
 
-                    if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
-                        let sx = if self.pending_scroll_x.abs() >= 1.0 {
-                            let s = self.pending_scroll_x.trunc();
-                            self.pending_scroll_x -= s;
-                            s
-                        } else {
-                            0.0
-                        };
-                        let sy = if self.pending_scroll_y.abs() >= 1.0 {
-                            let s = self.pending_scroll_y.trunc();
-                            self.pending_scroll_y -= s;
-                            s
-                        } else {
-                            0.0
-                        };
-                        return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
-                    }
+                    if !self.pending_grab && !self.pending_ungrab {
+                        if self.pending_scroll_x.abs() >= 1.0 || self.pending_scroll_y.abs() >= 1.0 {
+                            let sx = if self.pending_scroll_x.abs() >= 1.0 {
+                                let s = self.pending_scroll_x.trunc();
+                                self.pending_scroll_x -= s;
+                                s
+                            } else {
+                                0.0
+                            };
+                            let sy = if self.pending_scroll_y.abs() >= 1.0 {
+                                let s = self.pending_scroll_y.trunc();
+                                self.pending_scroll_y -= s;
+                                s
+                            } else {
+                                0.0
+                            };
+                            return Ok(InputEvent::MouseScroll { dx: sx, dy: sy });
+                        }
 
-                    if self.pending_dx != 0 || self.pending_dy != 0 {
-                        let e = InputEvent::MouseMove {
-                            dx: self.pending_dx,
-                            dy: self.pending_dy,
-                        };
-                        self.pending_dx = 0;
-                        self.pending_dy = 0;
-                        return Ok(e);
+                        if self.pending_dx != 0 || self.pending_dy != 0 {
+                            let e = InputEvent::MouseMove {
+                                dx: self.pending_dx,
+                                dy: self.pending_dy,
+                            };
+                            self.pending_dx = 0;
+                            self.pending_dy = 0;
+                            return Ok(e);
+                        }
                     }
                 }
 
                 InputEventKind::RelAxis(axis) => match axis {
-                    RelativeAxisType::REL_X      => self.pending_dx += ev.value(),
-                    RelativeAxisType::REL_Y      => self.pending_dy += ev.value(),
-                    RelativeAxisType::REL_WHEEL  => return Ok(InputEvent::MouseScroll { dx: 0.0, dy: ev.value() as f32 }),
-                    RelativeAxisType::REL_HWHEEL => return Ok(InputEvent::MouseScroll { dx: ev.value() as f32, dy: 0.0 }),
+                    RelativeAxisType::REL_X      => { if !self.pending_grab && !self.pending_ungrab { self.pending_dx += ev.value(); } }
+                    RelativeAxisType::REL_Y      => { if !self.pending_grab && !self.pending_ungrab { self.pending_dy += ev.value(); } }
+                    RelativeAxisType::REL_WHEEL  => { if !self.pending_grab && !self.pending_ungrab { return Ok(InputEvent::MouseScroll { dx: 0.0, dy: ev.value() as f32 }); } }
+                    RelativeAxisType::REL_HWHEEL => { if !self.pending_grab && !self.pending_ungrab { return Ok(InputEvent::MouseScroll { dx: ev.value() as f32, dy: 0.0 }); } }
                     _ => {}
                 },
 
                 InputEventKind::AbsAxis(axis) => match axis {
                     AbsoluteAxisType::ABS_MT_SLOT => {
-                        self.active_slot = ev.value() as usize;
+                        let s = ev.value() as usize;
+                        if s < self.slots.len() {
+                            self.active_slot = s;
+                        }
                     }
                     AbsoluteAxisType::ABS_X => {
-                        self.cur_x = Some(ev.value());
-                        self.touch_active = true;
+                        if self.touch_active {
+                            self.cur_x = Some(ev.value());
+                        }
                     }
                     AbsoluteAxisType::ABS_Y => {
-                        self.cur_y = Some(ev.value());
-                        self.touch_active = true;
+                        if self.touch_active {
+                            self.cur_y = Some(ev.value());
+                        }
                     }
                     AbsoluteAxisType::ABS_MT_POSITION_X => {
                         if self.active_slot == 0 {
                             self.cur_x = Some(ev.value());
-                            self.touch_active = true;
                         }
                     }
                     AbsoluteAxisType::ABS_MT_POSITION_Y => {
                         if self.active_slot == 0 {
                             self.cur_y = Some(ev.value());
-                            self.touch_active = true;
                         }
                     }
                     AbsoluteAxisType::ABS_MT_TRACKING_ID => {
-                        if self.active_slot == 0 {
-                            if ev.value() < 0 {
-                                // Finger lifted
-                                self.cur_x = None;
-                                self.cur_y = None;
-                                self.last_x = None;
-                                self.last_y = None;
-                                self.touch_active = false;
-                                self.finger_count = 0;
+                        if self.active_slot < self.slots.len() {
+                            if ev.value() >= 0 {
+                                self.slots[self.active_slot] = Some(ev.value());
                             } else {
-                                self.touch_active = true;
+                                self.slots[self.active_slot] = None;
                             }
+                        }
+                        let any_slot = self.slots.iter().any(|s| s.is_some());
+                        self.touch_active = any_slot || self.btn_touch;
+                        if !self.touch_active {
+                            self.cur_x = None;
+                            self.cur_y = None;
+                            self.last_x = None;
+                            self.last_y = None;
+                            self.finger_count = 0;
                         }
                     }
                     _ => {}
@@ -266,9 +380,10 @@ impl MouseCapture {
                 InputEventKind::Key(key) => {
                     match key {
                         Key::BTN_TOUCH => {
-                            let pressed = ev.value() != 0;
-                            self.touch_active = pressed;
-                            if !pressed {
+                            self.btn_touch = ev.value() != 0;
+                            let any_slot = self.slots.iter().any(|s| s.is_some());
+                            self.touch_active = any_slot || self.btn_touch;
+                            if !self.touch_active {
                                 self.cur_x = None;
                                 self.cur_y = None;
                                 self.last_x = None;
@@ -289,9 +404,6 @@ impl MouseCapture {
                                 self.last_x = None;
                                 self.last_y = None;
                             }
-                            if ev.value() != 0 {
-                                self.touch_active = true;
-                            }
                         }
                         Key::BTN_TOOL_DOUBLETAP => {
                             let new_count = if ev.value() != 0 {
@@ -305,9 +417,6 @@ impl MouseCapture {
                                 self.finger_count = new_count;
                                 self.last_x = None;
                                 self.last_y = None;
-                            }
-                            if ev.value() != 0 {
-                                self.touch_active = true;
                             }
                         }
                         Key::BTN_TOOL_TRIPLETAP => {
@@ -324,30 +433,54 @@ impl MouseCapture {
                                 self.last_y = None;
                             }
                         }
-                        Key::BTN_LEFT => {
-                            let pressed = ev.value() != 0;
-                            let button = if self.finger_count == 2 {
-                                MouseButton::Right
+                        Key::BTN_TOOL_QUADTAP => {
+                            let new_count = if ev.value() != 0 {
+                                4
+                            } else if self.finger_count == 4 {
+                                3
                             } else {
-                                MouseButton::Left
+                                self.finger_count
                             };
-                            return Ok(InputEvent::MouseButton { button, pressed });
+                            if new_count != self.finger_count {
+                                self.finger_count = new_count;
+                                self.last_x = None;
+                                self.last_y = None;
+                            }
+                        }
+                        Key::BTN_LEFT => {
+                            if !self.pending_grab && !self.pending_ungrab {
+                                let pressed = ev.value() != 0;
+                                let button = if self.finger_count == 2 {
+                                    MouseButton::Right
+                                } else {
+                                    MouseButton::Left
+                                };
+                                return Ok(InputEvent::MouseButton { button, pressed });
+                            }
                         }
                         Key::BTN_RIGHT => {
-                            let pressed = ev.value() != 0;
-                            return Ok(InputEvent::MouseButton { button: MouseButton::Right, pressed });
+                            if !self.pending_grab && !self.pending_ungrab {
+                                let pressed = ev.value() != 0;
+                                return Ok(InputEvent::MouseButton { button: MouseButton::Right, pressed });
+                            }
                         }
                         Key::BTN_MIDDLE => {
-                            let pressed = ev.value() != 0;
-                            return Ok(InputEvent::MouseButton { button: MouseButton::Middle, pressed });
+                            if !self.pending_grab && !self.pending_ungrab {
+                                let pressed = ev.value() != 0;
+                                return Ok(InputEvent::MouseButton { button: MouseButton::Middle, pressed });
+                            }
                         }
                         Key::BTN_SIDE => {
-                            let pressed = ev.value() != 0;
-                            return Ok(InputEvent::MouseButton { button: MouseButton::Other(4), pressed });
+                            if !self.pending_grab && !self.pending_ungrab {
+                                let pressed = ev.value() != 0;
+                                return Ok(InputEvent::MouseButton { button: MouseButton::Other(4), pressed });
+                            }
                         }
                         Key::BTN_EXTRA => {
-                            let pressed = ev.value() != 0;
-                            return Ok(InputEvent::MouseButton { button: MouseButton::Other(5), pressed });
+                            if !self.pending_grab && !self.pending_ungrab {
+                                let pressed = ev.value() != 0;
+                                return Ok(InputEvent::MouseButton { button: MouseButton::Other(5), pressed });
+                            }
                         }
                         _ => {}
                     }
@@ -360,7 +493,7 @@ impl MouseCapture {
 
 impl Drop for MouseCapture {
     fn drop(&mut self) {
-        let _ = self.ungrab();
+        let _ = self.force_ungrab();
     }
 }
 

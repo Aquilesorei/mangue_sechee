@@ -55,14 +55,16 @@ impl EdgeDetector {
     }
 
     /// Position the cursor at the entry point for an incoming crossing.
-    /// Leaves a comfortable margin inside the screen and arms a 150ms cooldown
-    /// to prevent cursor bounce-back from entry jitter.
+    /// Leaves a comfortable margin inside the screen and arms a 400ms cooldown
+    /// to prevent cursor bounce-back from entry jitter or touchpad inertia.
     pub fn place_at_entry(&mut self, from_edge: &Edge) {
+        let margin_x = (self.width * 0.05).clamp(80.0, 150.0);
+        let margin_y = (self.height * 0.05).clamp(80.0, 150.0);
         match from_edge {
-            Edge::Right  => self.x = (self.width - 12.0).max(0.0),
-            Edge::Left   => self.x = (self.width - 1.0).min(12.0),
-            Edge::Bottom => self.y = (self.height - 12.0).max(0.0),
-            Edge::Top    => self.y = (self.height - 1.0).min(12.0),
+            Edge::Right  => self.x = (self.width - margin_x).max(0.0),
+            Edge::Left   => self.x = margin_x.min(self.width - 1.0),
+            Edge::Bottom => self.y = (self.height - margin_y).max(0.0),
+            Edge::Top    => self.y = margin_y.min(self.height - 1.0),
         }
         self.contact_start = None;
         self.entry_cooldown = Some(Instant::now());
@@ -136,13 +138,15 @@ impl EdgeDetector {
 
         // Check entry cooldown to avoid immediately bouncing back through entry edge
         if let Some(cooldown_start) = self.entry_cooldown {
-            if cooldown_start.elapsed() < Duration::from_millis(150) {
+            if cooldown_start.elapsed() < Duration::from_millis(400) {
+                let margin_x = (self.width * 0.05).clamp(80.0, 150.0);
+                let margin_y = (self.height * 0.05).clamp(80.0, 150.0);
                 if let Some(c) = candidate {
                     match c {
-                        Edge::Right => self.x = self.width - 1.0,
-                        Edge::Left => self.x = 0.0,
-                        Edge::Bottom => self.y = self.height - 1.0,
-                        Edge::Top => self.y = 0.0,
+                        Edge::Right => self.x = (self.width - margin_x).max(0.0),
+                        Edge::Left => self.x = margin_x.min(self.width - 1.0),
+                        Edge::Bottom => self.y = (self.height - margin_y).max(0.0),
+                        Edge::Top => self.y = margin_y.min(self.height - 1.0),
                     }
                     candidate = None;
                 }
@@ -211,10 +215,11 @@ mod tests {
     fn test_place_at_entry_and_cooldown() {
         let mut detector = EdgeDetector::new(1920, 1080);
         detector.place_at_entry(&Edge::Left);
-        assert_eq!(detector.x, 12.0);
+        let expected_margin = (1920.0_f64 * 0.05).clamp(80.0, 150.0);
+        assert_eq!(detector.x, expected_margin);
 
-        // Immediate slight leftward jitter within 150ms should be absorbed by cooldown
-        assert_eq!(detector.update(-50, 0), None);
-        assert_eq!(detector.x, 0.0);
+        // Immediate leftward jitter within 400ms should be absorbed by cooldown
+        assert_eq!(detector.update(-500, 0), None);
+        assert_eq!(detector.x, expected_margin);
     }
 }

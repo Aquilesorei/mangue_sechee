@@ -54,6 +54,45 @@ pub struct TcpTransport {
 impl TcpTransport {
     pub fn new(stream: TcpStream) -> Self {
         let _ = stream.set_nodelay(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = stream.as_raw_fd();
+            unsafe {
+                let opt: libc::c_int = 1;
+                libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_KEEPALIVE,
+                    &opt as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&opt) as libc::socklen_t,
+                );
+                let idle: libc::c_int = 2;
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_KEEPIDLE,
+                    &idle as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&idle) as libc::socklen_t,
+                );
+                let intvl: libc::c_int = 1;
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_KEEPINTVL,
+                    &intvl as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&intvl) as libc::socklen_t,
+                );
+                let cnt: libc::c_int = 2;
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    libc::TCP_KEEPCNT,
+                    &cnt as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&cnt) as libc::socklen_t,
+                );
+            }
+        }
         Self { stream }
     }
 

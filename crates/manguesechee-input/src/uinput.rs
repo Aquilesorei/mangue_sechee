@@ -80,6 +80,22 @@ impl MouseInjector {
         }
         Ok(())
     }
+
+    pub fn release_all(&mut self) -> anyhow::Result<()> {
+        let mut evs: Vec<EvdevEvent> = Vec::new();
+        for k in [Key::BTN_LEFT, Key::BTN_RIGHT, Key::BTN_MIDDLE, Key::BTN_SIDE, Key::BTN_EXTRA] {
+            evs.push(EvdevEvent::new(EventType::KEY, k.code(), 0));
+        }
+        evs.push(syn());
+        let _ = self.device.emit(&evs);
+        Ok(())
+    }
+}
+
+impl Drop for MouseInjector {
+    fn drop(&mut self) {
+        let _ = self.release_all();
+    }
 }
 
 // ── KeyboardInjector ──────────────────────────────────────────────────────────
@@ -135,4 +151,21 @@ impl KeyboardInjector {
         }
         Ok(())
     }
+
+    pub fn release_all(&mut self) -> anyhow::Result<()> {
+        let mut evs: Vec<EvdevEvent> = Vec::new();
+        for code in 0x00u16..=0x2ffu16 {
+            evs.push(EvdevEvent::new(EventType::KEY, code, 0));
+        }
+        evs.push(syn());
+        let _ = self.device.emit(&evs);
+        Ok(())
+    }
 }
+
+impl Drop for KeyboardInjector {
+    fn drop(&mut self) {
+        let _ = self.release_all();
+    }
+}
+

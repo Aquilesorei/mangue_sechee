@@ -290,6 +290,7 @@ pub async fn send_fast_transfer(
 }
 
 /// Send files <= 15 MB inline over an mpsc channel (used by server out_tx).
+#[allow(dead_code)]
 pub async fn send_fast_transfer_to_channel(
     transfer_id: String,
     files: Vec<FileInfo>,

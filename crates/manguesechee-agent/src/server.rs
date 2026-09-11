@@ -191,11 +191,37 @@ async fn handle(
     }
 
     let mut broadcast_rx = broadcast_tx.subscribe();
+    let peer_target_addr = format!("{peer_ip}:24800");
+    let ipc_state_for_send = Arc::clone(&ipc_state);
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(msg) = out_rx.recv() => {
-                    if let Err(e) = sender.send(&msg).await { warn!("send: {e}"); break; }
+                    match msg {
+                        Message::ClipboardSync { text } => {
+                            if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                                let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                                let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                                let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                                let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+
+                                if total_size <= fast_limit {
+                                    let tid = uuid::Uuid::new_v4().to_string();
+                                    if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state_for_send).await {
+                                        warn!("send fast file transfer failed: {e}");
+                                        break;
+                                    }
+                                } else if total_size <= bg_limit {
+                                    crate::file_transfer::spawn_background_sender(peer_target_addr.clone(), files, disk_paths, total_size, Arc::clone(&ipc_state_for_send));
+                                }
+                            } else {
+                                if let Err(e) = sender.send(&Message::ClipboardSync { text }).await { warn!("send: {e}"); break; }
+                            }
+                        }
+                        other => {
+                            if let Err(e) = sender.send(&other).await { warn!("send: {e}"); break; }
+                        }
+                    }
                 }
                 Ok(msg) = broadcast_rx.recv() => {
                     if let Err(e) = sender.send(&msg).await { warn!("broadcast send: {e}"); break; }
@@ -233,31 +259,14 @@ async fn handle(
                     if let Some(exit) = edge.update(*dx, *dy) {
                         *has_control = false;
                         info!("cursor left via {exit:?} — ReturnControl");
+                        let _ = mouse.release_all();
+                        let _ = keyboard.release_all();
                         // Immediate clipboard sync on returning control to controller
                         if clipboard_enabled {
                             if let Some(text) = clipboard::get_text() {
-                                if !text.is_empty() {
-                                    if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
-                                        let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
-                                        let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
-                                        let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
-                                        let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
-
-                                        if total_size <= fast_limit {
-                                            let tid = uuid::Uuid::new_v4().to_string();
-                                            let tx_clone = out_tx.clone();
-                                            let state_clone = Arc::clone(&ipc_state);
-                                            tokio::spawn(async move {
-                                                let _ = crate::file_transfer::send_fast_transfer_to_channel(tid, files, disk_paths, total_size, &tx_clone, &state_clone).await;
-                                            });
-                                        } else if total_size <= bg_limit {
-                                            let peer_target = format!("{}:{}", peer_ip, 24800);
-                                            crate::file_transfer::spawn_background_sender(peer_target, files, disk_paths, total_size, Arc::clone(&ipc_state));
-                                        }
-                                    } else {
-                                        info!("→ syncing clipboard on ReturnControl ({} bytes)", text.len());
-                                        let _ = out_tx.try_send(Message::ClipboardSync { text });
-                                    }
+                                if !text.is_empty() && !clipboard::is_already_synced(&text) {
+                                    clipboard::mark_synced(&text);
+                                    let _ = out_tx.try_send(Message::ClipboardSync { text });
                                 }
                             }
                         }
@@ -343,10 +352,18 @@ async fn handle(
 
     // ── Event loop ────────────────────────────────────────────────────────────
     loop {
-        let msg = receiver.receive().await?;
+        let msg = match receiver.receive().await {
+            Ok(m) => m,
+            Err(e) => {
+                info!("peer connection closed: {e:#}");
+                break;
+            }
+        };
         if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
             break;
         }
     }
+    let _ = mouse.release_all();
+    let _ = keyboard.release_all();
     Ok(())
 }

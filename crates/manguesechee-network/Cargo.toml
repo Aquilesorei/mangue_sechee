@@ -14,3 +14,4 @@ anyhow            = { workspace = true }
 tracing           = { workspace = true }
 async-trait       = "0.1"
 mdns-sd = { workspace = true }
+libc = { workspace = true }

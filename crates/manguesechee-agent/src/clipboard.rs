@@ -21,14 +21,14 @@ const MAX_CLIPBOARD_BYTES: usize = 5 * 1024 * 1024;
 /// Mark text as already synchronized so our local watcher doesn't echo it back.
 pub fn mark_synced(text: &str) {
     if let Ok(mut s) = LAST_SYNCED.lock() {
-        *s = text.to_string();
+        *s = text.trim().to_string();
     }
 }
 
 /// Check if the given text matches the last synchronized content.
 pub fn is_already_synced(text: &str) -> bool {
     if let Ok(s) = LAST_SYNCED.lock() {
-        *s == text
+        *s == text.trim()
     } else {
         false
     }
@@ -108,18 +108,35 @@ pub fn ensure_display_env() {
 }
 
 /// Read text from the local clipboard across all available backends (wl-paste, arboard, xclip, xsel).
+/// Prioritizes `text/uri-list` so file manager copies (COSMIC Files, Dolphin, Nautilus) are captured directly.
 pub fn get_text() -> Option<String> {
     ensure_display_env();
 
-    // 1. Wayland fallback via wl-paste (standard across KDE, COSMIC, GNOME, Sway)
+    // 1. Wayland: Prioritize text/uri-list if available
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .args(["-t", "text/uri-list", "--no-newline"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if !text.trim().is_empty() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+
+        // Standard text via wl-paste
         if let Ok(output) = std::process::Command::new("wl-paste")
             .arg("--no-newline")
             .output()
         {
             if output.status.success() && !output.stdout.is_empty() {
                 if let Ok(text) = String::from_utf8(output.stdout) {
-                    return Some(text);
+                    if !text.is_empty() {
+                        return Some(text);
+                    }
                 }
             }
         }
@@ -142,15 +159,30 @@ pub fn get_text() -> Option<String> {
         }
     }
 
-    // 3. X11 fallback via xclip
+    // 3. X11 fallback via xclip: Prioritize text/uri-list if available
     if std::env::var("DISPLAY").is_ok() {
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "text/uri-list", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    if !text.trim().is_empty() {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+
         if let Ok(output) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-o"])
             .output()
         {
             if output.status.success() && !output.stdout.is_empty() {
                 if let Ok(text) = String::from_utf8(output.stdout) {
-                    return Some(text);
+                    if !text.is_empty() {
+                        return Some(text);
+                    }
                 }
             }
         }
@@ -162,7 +194,9 @@ pub fn get_text() -> Option<String> {
         {
             if output.status.success() && !output.stdout.is_empty() {
                 if let Ok(text) = String::from_utf8(output.stdout) {
-                    return Some(text);
+                    if !text.is_empty() {
+                        return Some(text);
+                    }
                 }
             }
         }

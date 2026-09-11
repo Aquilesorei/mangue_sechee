@@ -7,6 +7,24 @@ use manguesechee_core::protocol::FileInfo;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+/// Encode a local filesystem path to an RFC 2483 / RFC 3986 percent-encoded file URI.
+pub fn path_to_file_uri(path: &Path) -> String {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut uri = String::from("file://");
+    for &b in bytes {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(uri, "%{:02X}", b);
+            }
+        }
+    }
+    uri
+}
+
 /// Decode percent-encoded URI strings (e.g. `%20` -> space).
 pub fn percent_decode(s: &str) -> String {
     let mut bytes = Vec::with_capacity(s.len());
@@ -27,21 +45,36 @@ pub fn percent_decode(s: &str) -> String {
 }
 
 /// Detect and extract local file paths if the clipboard text represents copied files.
-/// Returns None if the text does not contain valid existing local file URIs.
+/// Accepts:
+/// - RFC 2483 file URIs (`file:///path` or `file://localhost/path`), percent-encoded or unencoded
+/// - Raw absolute filesystem paths (`/path/to/file`) from modern desktop environments
+/// - GNOME/Nautilus clipboard headers (`copy\n...`, `cut\n...`)
+/// Returns None if the text does not represent valid existing local files.
 pub fn parse_clipboard_file_uris(text: &str) -> Option<Vec<PathBuf>> {
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     if lines.is_empty() {
         return None;
     }
 
-    // Must start with "file://" or "copy" / "cut" header from GNOME/Nautilus
     let mut paths = Vec::new();
     for line in lines {
         if line == "copy" || line == "cut" {
             continue;
         }
-        if let Some(stripped) = line.strip_prefix("file://") {
-            let decoded = percent_decode(stripped);
+        if line.starts_with('#') {
+            continue;
+        }
+
+        // Strip surrounding quotes if present (e.g. "/path/to/file")
+        let line_clean = line.trim_matches(|c| c == '"' || c == '\'');
+
+        if let Some(stripped) = line_clean.strip_prefix("file://") {
+            let without_host = if let Some(after_localhost) = stripped.strip_prefix("localhost") {
+                after_localhost
+            } else {
+                stripped
+            };
+            let decoded = percent_decode(without_host);
             let path = PathBuf::from(decoded);
             if path.exists() {
                 paths.push(path);
@@ -49,11 +82,15 @@ pub fn parse_clipboard_file_uris(text: &str) -> Option<Vec<PathBuf>> {
                 // If a referenced path does not exist, treat as regular text
                 return None;
             }
-        } else {
-            // Non-URI line encountered (unless comment)
-            if line.starts_with('#') {
-                continue;
+        } else if line_clean.starts_with('/') {
+            let path = PathBuf::from(line_clean);
+            if path.exists() {
+                paths.push(path);
+            } else {
+                return None;
             }
+        } else {
+            // Line does not match any file or URI pattern
             return None;
         }
     }
@@ -152,17 +189,16 @@ pub fn set_file_clipboard(paths: &[PathBuf]) -> anyhow::Result<()> {
     crate::clipboard::ensure_display_env();
 
     let mut uri_list = String::new();
-    let mut gnome_copied = String::from("copy\n");
     for p in paths {
-        let uri = format!("file://{}\r\n", p.display());
+        let uri = path_to_file_uri(p);
         uri_list.push_str(&uri);
-        gnome_copied.push_str(&format!("file://{}\n", p.display()));
+        uri_list.push_str("\r\n");
     }
 
     crate::clipboard::mark_synced(&uri_list);
     let mut success = false;
 
-    // 1. Wayland wl-copy with text/uri-list and x-special/gnome-copied-files
+    // 1. Wayland wl-copy with text/uri-list
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
         if let Ok(mut child) = std::process::Command::new("wl-copy")
             .args(["-t", "text/uri-list"])
@@ -200,13 +236,17 @@ pub fn set_file_clipboard(paths: &[PathBuf]) -> anyhow::Result<()> {
         }
     }
 
-    // 3. Fallback arboard plain text
-    let _ = crate::clipboard::set_text(&uri_list);
-
+    // CRITICAL: If wl-copy or xclip succeeded, return immediately!
+    // NEVER call crate::clipboard::set_text(&uri_list) when wl-copy / xclip succeeds.
+    // In Wayland and X11, calling set_text creates a new text/plain clipboard selection
+    // which immediately overwrites and terminates the text/uri-list data source, causing
+    // COSMIC Files and Dolphin to paste a text file instead of the actual file!
     if success {
         info!("local file clipboard set ({} files)", paths.len());
         Ok(())
     } else {
+        // Fallback arboard plain text ONLY if wl-copy / xclip were unavailable
+        let _ = crate::clipboard::set_text(&uri_list);
         anyhow::bail!("failed to set file clipboard via wl-copy or xclip")
     }
 }
@@ -232,5 +272,54 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_to_file_uri() {
+        let path = Path::new("/home/user/test.txt");
+        assert_eq!(path_to_file_uri(path), "file:///home/user/test.txt");
+
+        let space_path = Path::new("/home/user/my test file.png");
+        assert_eq!(path_to_file_uri(space_path), "file:///home/user/my%20test%20file.png");
+    }
+
+    #[test]
+    fn test_percent_decode() {
+        assert_eq!(percent_decode("/home/user/my%20file.txt"), "/home/user/my file.txt");
+        assert_eq!(percent_decode("%2Ftmp%2Ftest"), "/tmp/test");
+    }
+
+    #[test]
+    fn test_parse_clipboard_file_uris() {
+        let temp_path = std::env::temp_dir().join(format!("mangue_test_{}.txt", std::process::id()));
+        std::fs::write(&temp_path, "hello").unwrap();
+        let path_str = temp_path.to_str().unwrap();
+
+        // Standard RFC 2483 URI
+        let uri_text = format!("file://{path_str}\r\n");
+        let parsed = parse_clipboard_file_uris(&uri_text);
+        assert!(parsed.is_some());
+        assert_eq!(parsed.unwrap()[0], PathBuf::from(path_str));
+
+        // Raw path
+        let raw_text = format!("{path_str}\n");
+        let parsed_raw = parse_clipboard_file_uris(&raw_text);
+        assert!(parsed_raw.is_some());
+        assert_eq!(parsed_raw.unwrap()[0], PathBuf::from(path_str));
+
+        // Non-existent path
+        let fake = "file:///nonexistent/path/for/sure/12345.txt";
+        assert!(parse_clipboard_file_uris(fake).is_none());
+
+        // Plain text
+        let text = "just some random text without paths";
+        assert!(parse_clipboard_file_uris(text).is_none());
+
+        let _ = std::fs::remove_file(temp_path);
     }
 }
