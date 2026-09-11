@@ -1,0 +1,81 @@
+import { Button, VerticalBox, HorizontalBox, ComboBox, LineEdit, ProgressIndicator } from "std-widgets.slint";
+
+export component SetupWizard inherits VerticalBox {
+    in-out property <int> wizard-page: 0;
+    in-out property <int> wizard-role: 0;
+    in-out property <string> wizard-addr: "";
+    in-out property <string> wizard-side: "right";
+
+    callback finish(int, string, string);
+
+    padding: 40px; spacing: 20px;
+    alignment: center;
+
+    Text {
+        text: "Welcome to Manguesechee";
+        font-size: 26px; font-weight: 700; color: #e0e0ff;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: "Control multiple Linux machines seamlessly with one mouse and keyboard.";
+        font-size: 14px; color: #8e90a6; wrap: word-wrap;
+        horizontal-alignment: center;
+    }
+
+    if wizard-page == 0 : VerticalBox {
+        spacing: 16px;
+        Text { text: "Machine Role:"; color: #b4b7d6; font-size: 15px; font-weight: 600; }
+        ComboBox {
+            model: ["Controller + Peer (Bidirectional - Recommended)",
+                    "Controller only (Sends mouse/keyboard to peers)",
+                    "Peer only (Receives input from another computer)"];
+            current-index: root.wizard-role;
+            selected => { root.wizard-role = self.current-index; }
+        }
+        HorizontalBox {
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Next →"; primary: true;
+                clicked => { root.wizard-page = 1; }
+            }
+        }
+    }
+
+    if wizard-page == 1 : VerticalBox {
+        spacing: 14px;
+        Text { text: "Connect to Peer:"; color: #b4b7d6; font-size: 15px; font-weight: 600; }
+        Text {
+            text: "Enter the IP:port of the other machine, or leave blank to rely on auto-discovery:";
+            color: #8e90a6; font-size: 13px;
+        }
+        LineEdit {
+            placeholder-text: "192.168.1.x:24800";
+            text <=> root.wizard-addr;
+        }
+        Text { text: "Where is the peer machine placed?"; color: #b4b7d6; font-size: 14px; font-weight: 600; }
+        ComboBox {
+            model: ["Right", "Left", "Above", "Below"];
+            selected => { root.wizard-side = self.current-value.to-lowercase(); }
+        }
+        HorizontalBox {
+            spacing: 10px;
+            Button { text: "← Back"; clicked => { root.wizard-page = 0; } }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Finish Setup & Connect"; primary: true;
+                clicked => {
+                    root.finish(root.wizard-role, root.wizard-addr, root.wizard-side);
+                }
+            }
+        }
+    }
+}
+
+export component ConnectingView inherits VerticalBox {
+    in property <string> status: "Starting…";
+
+    padding: 60px; spacing: 20px; alignment: center;
+    Text { text: "Connecting to Manguesechee Agent…"; font-size: 22px; color: #e0e0ff; horizontal-alignment: center; }
+    ProgressIndicator { indeterminate: true; }
+    Text { text: root.status; font-size: 13px; color: #8e90a6; horizontal-alignment: center; }
+}

@@ -1,0 +1,76 @@
+import { Button, HorizontalBox } from "std-widgets.slint";
+
+export component HeaderBar inherits Rectangle {
+    in property <int> active-tab: 0;
+    in property <string> status: "Ready";
+    in property <bool> is-service-running: true;
+    in property <bool> cursor-locked: false;
+
+    callback toggle-cursor-lock();
+    callback start-service();
+    callback stop-service();
+    callback restart-service();
+
+    height: 52px;
+    background: #181926;
+    border-radius: 8px;
+
+    HorizontalBox {
+        padding-left: 16px; padding-right: 16px; spacing: 12px;
+        Text {
+            text: root.active-tab == 0 ? "Peers & Connections"
+                : (root.active-tab == 1 ? "Screen Topology Layout"
+                : (root.active-tab == 4 ? "File Transfers & History"
+                : (root.active-tab == 2 ? "System Settings" : "System Logs")));
+            font-size: 17px; font-weight: 700; color: #e0e0ff;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Status Badge
+        Rectangle {
+            background: #232536; border-radius: 12px; height: 28px;
+            HorizontalBox {
+                padding-left: 10px; padding-right: 10px; spacing: 6px;
+                Rectangle {
+                    width: 7px; height: 7px; border-radius: 3.5px;
+                    background: root.is-service-running ? #4ade80 : #ef4444;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.is-service-running ? root.status : "Service Stopped";
+                    font-size: 12px;
+                    color: root.is-service-running ? #a5b4fc : #f87171;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Cursor Lock Toggle Button
+        Button {
+            text: root.cursor-locked ? "🔒 Cursor Locked" : "🔓 Lock Cursor";
+            primary: root.cursor-locked;
+            enabled: root.is-service-running;
+            clicked => { root.toggle-cursor-lock(); }
+        }
+
+        // Live Service Controls (Start, Stop, Restart)
+        if root.is-service-running : HorizontalBox {
+            spacing: 6px;
+            Button {
+                text: "🔄 Restart";
+                clicked => { root.restart-service(); }
+            }
+            Button {
+                text: "⏹ Stop";
+                clicked => { root.stop-service(); }
+            }
+        }
+        if !root.is-service-running : Button {
+            text: "▶ Start Daemon";
+            primary: true;
+            clicked => { root.start-service(); }
+        }
+    }
+}

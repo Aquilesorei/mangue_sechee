@@ -1,0 +1,25 @@
+export struct PeerEntry {
+    name:        string,
+    address:     string,
+    paired:      bool,
+    connected:   bool,
+    position:    string,
+    ping-status: string,
+}
+
+export struct TransferItem {
+    name:         string,
+    size-text:    string,
+    progress:     float,
+    status-text:  string,
+    is-receiving: bool,
+}
+
+export struct HistoryItem {
+    name:         string,
+    size-text:    string,
+    time-text:    string,
+    is-receiving: bool,
+}
+
+export enum AppView { Wizard, Connecting, Main }

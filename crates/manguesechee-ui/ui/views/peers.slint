@@ -1,0 +1,240 @@
+import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit, ScrollView, ComboBox } from "std-widgets.slint";
+import { PeerEntry } from "../types.slint";
+
+export component PeersView inherits VerticalBox {
+    in property <string> role-label: "Server + Client (Both)";
+    in property <string> local-ip: "127.0.0.1";
+    in property <string> setting-port: "24800";
+    in property <bool> discovery: true;
+    in property <string> connected-peer: "";
+    in property <bool> topology-configured: false;
+    in-out property <string> topology-notice: "";
+    in-out property <string> connection-error: "";
+    in property <bool> is-service-running: true;
+    in property <[PeerEntry]> peers: [];
+
+    callback configure-topology-clicked();
+    callback dismiss-error();
+    callback connect-requested(string);
+    callback disconnect-requested();
+    callback ping-peer(string);
+    callback forget-peer(string);
+    callback update-peer-position(string, string);
+
+    spacing: 12px;
+    vertical-stretch: 1;
+
+    // Server & Client Status Overview Card
+    Rectangle {
+        height: 70px; background: #181926; border-radius: 8px;
+        HorizontalBox {
+            padding: 12px; spacing: 16px;
+            VerticalBox {
+                spacing: 2px;
+                Text { text: "Active Role:"; font-size: 11px; color: #72748a; }
+                Text { text: root.role-label; font-size: 13px; font-weight: 600; color: #e0e0ff; }
+            }
+            Rectangle { width: 1px; background: #2b2d42; }
+            VerticalBox {
+                spacing: 2px;
+                Text { text: "This Machine Address:"; font-size: 11px; color: #72748a; }
+                Text { text: root.local-ip + ":" + root.setting-port; font-size: 13px; font-weight: 700; color: #38ef7d; }
+            }
+            Rectangle { width: 1px; background: #2b2d42; }
+            VerticalBox {
+                spacing: 2px;
+                Text { text: "Auto-Discovery:"; font-size: 11px; color: #72748a; }
+                Text { text: root.discovery ? "mDNS Active" : "Disabled"; font-size: 13px; font-weight: 600; color: root.discovery ? #38ef7d : #f59e0b; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    // ── Connection Success Banner with Jump to Topology (Hidden once topology is set) ──
+    if root.connected-peer != "" && !root.topology-configured : Rectangle {
+        background: #0f2e1b; border-radius: 8px; border-width: 1px; border-color: #22c55e;
+        HorizontalBox {
+            padding: 12px; spacing: 14px;
+            Rectangle {
+                width: 10px; height: 10px; border-radius: 5px; background: #22c55e;
+                y: (parent.height - self.height) / 2;
+            }
+            VerticalBox {
+                spacing: 2px; horizontal-stretch: 1;
+                Text {
+                    text: "✓ Connected to " + root.connected-peer;
+                    font-size: 14px; font-weight: 700; color: #4ade80;
+                }
+                Text {
+                    text: "Seamless control is active! Click below to arrange your screen layout.";
+                    font-size: 12px; color: #a7f3d0;
+                }
+            }
+            Button {
+                text: "📐 Configure Screen Topology →";
+                primary: true;
+                clicked => { root.configure-topology-clicked(); }
+            }
+        }
+    }
+
+    // ── Topology Configured & Synced Banner ───────────────────────
+    if root.connected-peer != "" && root.topology-configured && root.topology-notice != "" : Rectangle {
+        background: #141f36; border-radius: 8px; border-width: 1px; border-color: #3b82f6;
+        HorizontalBox {
+            padding: 12px; spacing: 14px;
+            Rectangle {
+                width: 10px; height: 10px; border-radius: 5px; background: #3b82f6;
+                y: (parent.height - self.height) / 2;
+            }
+            VerticalBox {
+                spacing: 2px; horizontal-stretch: 1;
+                Text {
+                    text: "✓ Screen Topology Configured & Synced";
+                    font-size: 14px; font-weight: 700; color: #60a5fa;
+                }
+                Text {
+                    text: root.topology-notice;
+                    font-size: 12px; color: #bfdbfe;
+                }
+            }
+            Button {
+                text: "📐 Adjust Layout";
+                clicked => { root.configure-topology-clicked(); }
+            }
+            Button {
+                text: "✕";
+                clicked => { root.topology-notice = ""; }
+            }
+        }
+    }
+
+    // ── Connection Error Banner ───────────────────────────────────
+    if root.connection-error != "" : Rectangle {
+        background: #3b1114; border-radius: 8px; border-width: 1px; border-color: #ef4444;
+        HorizontalBox {
+            padding: 12px; spacing: 14px;
+            Rectangle {
+                width: 10px; height: 10px; border-radius: 5px; background: #ef4444;
+                y: (parent.height - self.height) / 2;
+            }
+            VerticalBox {
+                spacing: 2px; horizontal-stretch: 1;
+                Text {
+                    text: "⚠ Connection Failed";
+                    font-size: 14px; font-weight: 700; color: #f87171;
+                }
+                Text {
+                    text: root.connection-error;
+                    font-size: 12px; color: #fca5a5;
+                }
+            }
+            Button {
+                text: "Dismiss";
+                clicked => { root.connection-error = ""; root.dismiss-error(); }
+            }
+        }
+    }
+
+    // Direct Connect Bar
+    GroupBox {
+        title: "Direct Connect";
+        vertical-stretch: 0;
+        HorizontalBox {
+            spacing: 8px;
+            alignment: center;
+            manual-ip := LineEdit {
+                height: 38px;
+                placeholder-text: "Enter peer IP:port (e.g. 192.168.1.50:24800)";
+                horizontal-stretch: 1;
+            }
+            Button {
+                height: 38px;
+                text: "Connect"; primary: true;
+                enabled: root.is-service-running;
+                clicked => { root.connect-requested(manual-ip.text); }
+            }
+        }
+    }
+
+    // Discovered & Configured Peers List
+    GroupBox {
+        title: "Discovered & Configured Peers"; vertical-stretch: 1;
+        ScrollView {
+            VerticalBox {
+                spacing: 8px; padding-right: 6px;
+
+                for peer[i] in root.peers : Rectangle {
+                    height: 64px; background: #181926; border-radius: 8px; border-width: 1px; border-color: #2b2d42;
+                    HorizontalBox {
+                        padding-left: 12px; padding-right: 12px; spacing: 10px;
+                        Rectangle {
+                            width: 10px; height: 10px; border-radius: 5px;
+                            background: peer.connected ? #38ef7d : (peer.paired ? #f59e0b : #6b7280);
+                            y: (parent.height - self.height) / 2;
+                        }
+                        VerticalBox {
+                            spacing: 2px; horizontal-stretch: 1;
+                            HorizontalBox {
+                                spacing: 8px;
+                                Text { text: peer.name; font-size: 14px; font-weight: 700; color: #e0e0ff; }
+                                if peer.ping-status != "" : Rectangle {
+                                    background: #1e293b; border-radius: 4px; height: 18px;
+                                    HorizontalBox {
+                                        padding-left: 6px; padding-right: 6px;
+                                        Text { text: peer.ping-status; font-size: 10px; font-weight: 600; color: #38ef7d; }
+                                    }
+                                }
+                            }
+                            Text { text: peer.address; font-size: 11px; color: #72748a; }
+                        }
+
+                        // Side / Position selector directly on card
+                        Text { text: "Side:"; font-size: 12px; color: #8e90a6; vertical-alignment: center; }
+                        ComboBox {
+                            width: 95px;
+                            model: ["Right", "Left", "Above", "Below"];
+                            current-index: peer.position == "left" ? 1 : (peer.position == "above" ? 2 : (peer.position == "below" ? 3 : 0));
+                            selected => { root.update-peer-position(peer.address, self.current-value.to-lowercase()); }
+                        }
+
+                        // Ping button
+                        Button {
+                            text: "📶 Ping";
+                            clicked => { root.ping-peer(peer.address); }
+                        }
+
+                        // Unpair button
+                        Button {
+                            text: "🗑️ Unpair";
+                            clicked => { root.forget-peer(peer.address); }
+                        }
+
+                        // Topology layout button if connected
+                        if peer.connected : Button {
+                            text: "📐 Layout";
+                            clicked => { root.configure-topology-clicked(); }
+                        }
+
+                        // Connect / Disconnect button
+                        Button {
+                            text: peer.connected ? "Disconnect" : "Connect";
+                            primary: !peer.connected;
+                            enabled: root.is-service-running;
+                            clicked => {
+                                if peer.connected { root.disconnect-requested(); }
+                                else { root.connect-requested(peer.address); }
+                            }
+                        }
+                    }
+                }
+
+                if root.peers.length == 0 : VerticalBox {
+                    alignment: center; padding: 24px; spacing: 8px;
+                    Text { text: "No peers currently detected on the local network."; color: #8e90a6; horizontal-alignment: center; }
+                    Text { text: "Ensure the other machine has Manguesechee installed and is connected to the same Wi-Fi/LAN."; font-size: 12px; color: #5a5c72; horizontal-alignment: center; }
+                }
+            }
+        }
+    }
+}

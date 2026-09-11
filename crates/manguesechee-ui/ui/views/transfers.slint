@@ -1,0 +1,98 @@
+import { VerticalBox, HorizontalBox, GroupBox, Switch, ProgressIndicator, ScrollView } from "std-widgets.slint";
+import { TransferItem, HistoryItem } from "../types.slint";
+
+export component TransfersView inherits ScrollView {
+    in-out property <bool> setting-file-transfer: true;
+    in property <[TransferItem]> active-transfers: [];
+    in property <[HistoryItem]>  transfer-history: [];
+
+    callback toggle-file-transfer(bool);
+
+    vertical-stretch: 1;
+
+    VerticalBox {
+        spacing: 14px; padding-right: 10px;
+
+        // Info banner with quick toggle switch
+        Rectangle {
+            background: #181926; border-radius: 8px; border-width: 1px; border-color: #2b2d42;
+            HorizontalBox {
+                padding: 12px; spacing: 14px;
+                Text { text: "💡"; font-size: 20px; vertical-alignment: center; }
+                VerticalBox {
+                    spacing: 2px; horizontal-stretch: 1;
+                    Text { text: "Seamless File Sharing"; font-size: 14px; font-weight: 700; color: #e0e0ff; }
+                    Text {
+                        text: root.setting-file-transfer
+                            ? "Copy files in any file manager (Nautilus, Dolphin, COSMIC Files), move your cursor across to the other machine, and paste with Ctrl+V."
+                            : "File transfer is currently disabled. Toggle the switch to resume seamless file transfers.";
+                        font-size: 12px; color: root.setting-file-transfer ? #9a9cb6 : #f59e0b; wrap: word-wrap;
+                    }
+                }
+                HorizontalBox {
+                    spacing: 8px; alignment: center;
+                    Text { text: "File Transfer:"; font-size: 13px; color: #b4b7d6; vertical-alignment: center; }
+                    Switch {
+                        text: root.setting-file-transfer ? "Enabled" : "Disabled";
+                        checked <=> root.setting-file-transfer;
+                        toggled => { root.toggle-file-transfer(self.checked); }
+                    }
+                }
+            }
+        }
+
+        // Active Transfers
+        GroupBox {
+            title: "Active Transfers";
+            VerticalBox {
+                spacing: 8px;
+                for item[i] in root.active-transfers : Rectangle {
+                    background: #181926; border-radius: 6px;
+                    VerticalBox {
+                        padding: 8px; spacing: 6px;
+                        HorizontalBox {
+                            spacing: 8px;
+                            Text { text: item.is-receiving ? "⬇️" : "⬆️"; font-size: 14px; vertical-alignment: center; }
+                            Text { text: item.name; font-size: 13px; font-weight: 600; color: #e0e0ff; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text { text: item.size-text; font-size: 12px; color: #9a9cb6; vertical-alignment: center; }
+                            Text { text: item.status-text; font-size: 12px; font-weight: 600; color: #60a5fa; vertical-alignment: center; }
+                        }
+                        ProgressIndicator {
+                            progress: item.progress;
+                        }
+                    }
+                }
+                if !root.setting-file-transfer : Text {
+                    text: "⚠️ File transfer is currently disabled. Toggle the switch above to enable.";
+                    color: #f59e0b; font-size: 13px; horizontal-alignment: center;
+                }
+                if root.setting-file-transfer && root.active-transfers.length == 0 : Text {
+                    text: "No active transfers. Files transfer automatically when copied to clipboard.";
+                    color: #555770; font-size: 13px; horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Transfer History
+        GroupBox {
+            title: "Recent Transfer History";
+            VerticalBox {
+                spacing: 6px;
+                for entry[i] in root.transfer-history : Rectangle {
+                    background: #181926; border-radius: 6px; height: 38px;
+                    HorizontalBox {
+                        padding-left: 10px; padding-right: 10px; spacing: 10px;
+                        Text { text: entry.is-receiving ? "📥" : "📤"; font-size: 13px; vertical-alignment: center; }
+                        Text { text: entry.name; font-size: 13px; font-weight: 500; color: #e0e0ff; horizontal-stretch: 1; vertical-alignment: center; }
+                        Text { text: entry.size-text; font-size: 12px; color: #9a9cb6; vertical-alignment: center; }
+                        Text { text: entry.time-text; font-size: 11px; color: #555770; vertical-alignment: center; }
+                    }
+                }
+                if root.transfer-history.length == 0 : Text {
+                    text: "No transfer history yet.";
+                    color: #555770; font-size: 13px; horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

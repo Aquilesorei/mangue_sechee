@@ -1,0 +1,163 @@
+import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit, Switch, ComboBox, ScrollView } from "std-widgets.slint";
+
+export component SettingsView inherits ScrollView {
+    in-out property <string> setting-name: "fedora";
+    in-out property <int> setting-role: 0; // 0=Both, 1=Controller, 2=Peer
+    in-out property <string> setting-port: "24800";
+    in-out property <bool> setting-discovery: true;
+    in-out property <bool> setting-clipboard: true;
+    in-out property <bool> setting-file-transfer: true;
+    in-out property <bool> setting-autostart: true;
+    in-out property <string> setting-velocity: "20";
+    in-out property <string> setting-switch-delay: "0";
+    in-out property <string> setting-deadzone: "50";
+    in-out property <bool> cursor-locked: false;
+    in-out property <string> setting-width: "1920";
+    in-out property <string> setting-height: "1080";
+    in-out property <string> setting-peer-addr: "";
+    in-out property <string> setting-peer-pos: "right";
+    in property <string> settings-feedback: "";
+
+    callback toggle-file-transfer(bool);
+    callback auto-detect-screen();
+    callback save-settings();
+
+    vertical-stretch: 1;
+
+    VerticalBox {
+        spacing: 14px; padding-right: 10px;
+
+        GroupBox {
+            title: "Machine & Role Configuration";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Device Name:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-name; horizontal-stretch: 1; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Operational Role:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["Both (Controller & Controlled Peer)", "Controller only (Send local inputs)", "Peer only (Receive remote inputs)"];
+                        current-index: root.setting-role;
+                        selected => { root.setting-role = self.current-index; }
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Network & Daemon Settings";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Listening TCP Port:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-port; horizontal-stretch: 1; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "mDNS Discovery:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch { text: root.setting-discovery ? "Enabled" : "Disabled"; checked <=> root.setting-discovery; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Clipboard Sharing:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch { text: root.setting-clipboard ? "Enabled" : "Disabled"; checked <=> root.setting-clipboard; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "File Transfer:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch {
+                        text: root.setting-file-transfer ? "Enabled" : "Disabled";
+                        checked <=> root.setting-file-transfer;
+                        toggled => { root.toggle-file-transfer(self.checked); }
+                    }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Autostart on Login:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch { text: root.setting-autostart ? "Enabled (systemd)" : "Disabled"; checked <=> root.setting-autostart; }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Edge Switching & Sensitivity Tuning";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Flick Velocity (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-velocity; width: 80px; }
+                    Text { text: "(Fast flick speed to jump; 0 = disabled, 20 = recommended)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Dwell Delay (ms):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-switch-delay; width: 80px; }
+                    Text { text: "(Hold cursor at edge to switch; 0 = flick only, 150 = recommended dwell)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Corner Deadzone (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-deadzone; width: 80px; }
+                    Text { text: "(Protects corners when clicking window controls or menus)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Lock Cursor:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch { text: root.cursor-locked ? "Locked to screen" : "Unlocked"; checked <=> root.cursor-locked; }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Display Geometry (Edge Detection Boundaries)";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Screen Width (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-width; horizontal-stretch: 1; }
+                    Text { text: "Height (px):"; width: 80px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { text <=> root.setting-height; horizontal-stretch: 1; }
+                    Button { text: "Auto-Detect"; clicked => { root.auto-detect-screen(); } }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Default Peer Connection";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Peer IP Address:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    LineEdit { placeholder-text: "192.168.1.50:24800"; text <=> root.setting-peer-addr; horizontal-stretch: 1; }
+                    Text { text: "Side:"; width: 40px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["Right", "Left", "Above", "Below"];
+                        current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
+                        selected => { root.setting-peer-pos = self.current-value.to-lowercase(); }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 12px;
+            if root.settings-feedback != "" : Text {
+                text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600; vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Save & Apply Settings"; primary: true;
+                clicked => { root.save-settings(); }
+            }
+        }
+    }
+}

@@ -1,0 +1,114 @@
+import { VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component Sidebar inherits Rectangle {
+    in-out property <int> active-tab: 0;
+    in property <string> local-name: "";
+    in property <string> local-ip: "";
+    in property <string> setting-port: "24800";
+    in property <bool> is-service-running: true;
+
+    callback refresh-logs();
+
+    width: 200px;
+    background: #181926;
+
+    VerticalBox {
+        padding: 16px; spacing: 8px;
+
+        // Brand
+        HorizontalBox {
+            spacing: 10px; padding-bottom: 12px;
+            Image {
+                source: @image-url("../../../../assets/icons/manguesechee-48.png");
+                width: 28px; height: 28px;
+            }
+            Text {
+                text: "Manguesechee"; font-size: 17px; font-weight: 700; color: #e0e0ff;
+                vertical-alignment: center;
+            }
+        }
+
+        // Nav Items
+        Rectangle {
+            height: 38px; border-radius: 6px;
+            background: root.active-tab == 0 ? #2b2d42 : transparent;
+            HorizontalBox {
+                padding-left: 12px; padding-right: 12px;
+                Text { text: "🖥️  Peers"; font-size: 14px; font-weight: 600; color: root.active-tab == 0 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            }
+            TouchArea { clicked => { root.active-tab = 0; } }
+        }
+
+        Rectangle {
+            height: 38px; border-radius: 6px;
+            background: root.active-tab == 1 ? #2b2d42 : transparent;
+            HorizontalBox {
+                padding-left: 12px; padding-right: 12px;
+                Text { text: "📐  Topology"; font-size: 14px; font-weight: 600; color: root.active-tab == 1 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            }
+            TouchArea { clicked => { root.active-tab = 1; } }
+        }
+
+        Rectangle {
+            height: 38px; border-radius: 6px;
+            background: root.active-tab == 4 ? #2b2d42 : transparent;
+            HorizontalBox {
+                padding-left: 12px; padding-right: 12px;
+                Text { text: "📁  Files"; font-size: 14px; font-weight: 600; color: root.active-tab == 4 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            }
+            TouchArea { clicked => { root.active-tab = 4; } }
+        }
+
+        Rectangle {
+            height: 38px; border-radius: 6px;
+            background: root.active-tab == 2 ? #2b2d42 : transparent;
+            HorizontalBox {
+                padding-left: 12px; padding-right: 12px;
+                Text { text: "⚙️  Settings"; font-size: 14px; font-weight: 600; color: root.active-tab == 2 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            }
+            TouchArea { clicked => { root.active-tab = 2; } }
+        }
+
+        Rectangle {
+            height: 38px; border-radius: 6px;
+            background: root.active-tab == 3 ? #2b2d42 : transparent;
+            HorizontalBox {
+                padding-left: 12px; padding-right: 12px;
+                Text { text: "📜  Logs"; font-size: 14px; font-weight: 600; color: root.active-tab == 3 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            }
+            TouchArea { clicked => { root.active-tab = 3; root.refresh-logs(); } }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // Sidebar Footer: Local Identity, IP & Daemon Pill
+        Rectangle {
+            background: #11121c; border-radius: 8px; height: 74px;
+            VerticalBox {
+                padding: 8px; spacing: 3px;
+                HorizontalBox {
+                    Text { text: "Device:"; font-size: 11px; color: #72748a; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: root.local-name; font-size: 12px; font-weight: 600; color: #e0e0ff; overflow: elide; }
+                }
+                HorizontalBox {
+                    Text { text: "LAN IP:"; font-size: 11px; color: #72748a; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #818cf8; overflow: elide; }
+                }
+                HorizontalBox {
+                    spacing: 6px;
+                    Rectangle {
+                        width: 8px; height: 8px; border-radius: 4px;
+                        background: root.is-service-running ? #38ef7d : #ef4444;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: root.is-service-running ? "Daemon: Running" : "Daemon: Stopped";
+                        font-size: 11px; color: root.is-service-running ? #38ef7d : #f87171;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,120 @@
+import { Button, VerticalBox, HorizontalBox, ComboBox } from "std-widgets.slint";
+
+export component TopologyView inherits VerticalBox {
+    in property <string> connected-peer: "";
+    in-out property <string> setting-peer-pos: "right";
+    in property <string> local-name: "";
+    in property <string> local-ip: "";
+    in property <string> setting-port: "24800";
+    in property <string> setting-width: "1920";
+    in property <string> setting-height: "1080";
+    in property <string> settings-feedback: "";
+
+    callback save-topology(string);
+
+    spacing: 16px;
+    vertical-stretch: 1;
+
+    Text {
+        text: "Configure the physical arrangement of your screens. Moving your mouse past this screen's edge transfers control to the peer. Changes automatically synchronize bidirectionally with the connected peer over the network.";
+        color: #8e90a6; font-size: 13px; wrap: word-wrap;
+    }
+
+    // Visual Monitor Placement Grid
+    Rectangle {
+        height: 260px; background: #181926; border-radius: 8px;
+        VerticalBox {
+            padding: 16px; spacing: 10px; alignment: center;
+
+            // Top Slot
+            HorizontalBox {
+                alignment: center;
+                Rectangle {
+                    width: 140px; height: 50px; border-radius: 6px;
+                    background: root.setting-peer-pos == "above" ? #3b82f6 : #232536;
+                    Text {
+                        text: root.setting-peer-pos == "above" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Above)") : "Top Edge";
+                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.setting-peer-pos = "above"; root.save-topology("above"); } }
+                }
+            }
+
+            // Middle Row: Left Slot | THIS SCREEN | Right Slot
+            HorizontalBox {
+                alignment: center; spacing: 12px;
+
+                // Left Slot
+                Rectangle {
+                    width: 130px; height: 80px; border-radius: 6px;
+                    background: root.setting-peer-pos == "left" ? #3b82f6 : #232536;
+                    Text {
+                        text: root.setting-peer-pos == "left" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Left)") : "Left Edge";
+                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.setting-peer-pos = "left"; root.save-topology("left"); } }
+                }
+
+                // Central Screen (This Machine)
+                Rectangle {
+                    width: 190px; height: 100px; border-radius: 8px;
+                    background: #4f46e5; border-width: 2px; border-color: #818cf8;
+                    VerticalBox {
+                        alignment: center; spacing: 3px;
+                        Text { text: "🖥️ " + root.local-name; font-size: 14px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #a5b4fc; horizontal-alignment: center; }
+                        Text { text: root.setting-width + "×" + root.setting-height; font-size: 11px; color: #e0e7ff; horizontal-alignment: center; }
+                    }
+                }
+
+                // Right Slot
+                Rectangle {
+                    width: 130px; height: 80px; border-radius: 6px;
+                    background: root.setting-peer-pos == "right" ? #3b82f6 : #232536;
+                    Text {
+                        text: root.setting-peer-pos == "right" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Right)") : "Right Edge";
+                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.setting-peer-pos = "right"; root.save-topology("right"); } }
+                }
+            }
+
+            // Bottom Slot
+            HorizontalBox {
+                alignment: center;
+                Rectangle {
+                    width: 140px; height: 50px; border-radius: 6px;
+                    background: root.setting-peer-pos == "below" ? #3b82f6 : #232536;
+                    Text {
+                        text: root.setting-peer-pos == "below" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Below)") : "Bottom Edge";
+                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.setting-peer-pos = "below"; root.save-topology("below"); } }
+                }
+            }
+        }
+    }
+
+    // Selector & Save Control
+    HorizontalBox {
+        spacing: 12px;
+        Text { text: "Select Peer Screen Location:"; color: #b4b7d6; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+        ComboBox {
+            model: ["Right", "Left", "Above", "Below"];
+            current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
+            selected => {
+                root.setting-peer-pos = self.current-value.to-lowercase();
+                root.save-topology(root.setting-peer-pos);
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Button {
+            text: "Save Topology"; primary: true;
+            clicked => { root.save-topology(root.setting-peer-pos); }
+        }
+    }
+
+    if root.settings-feedback != "" : Text {
+        text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600;
+    }
+}
