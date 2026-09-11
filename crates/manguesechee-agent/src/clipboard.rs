@@ -110,7 +110,9 @@ pub fn ensure_display_env() {
 /// Read text from the local clipboard across all available backends (wl-paste, arboard, xclip, xsel).
 /// Prioritizes `text/uri-list` so file manager copies (COSMIC Files, Dolphin, Nautilus) are captured directly.
 pub fn get_text() -> Option<String> {
-    ensure_display_env();
+    // Note: ensure_display_env() is intentionally NOT called here — it is called once at
+    // startup in main(). Calling it on every 750ms poll would run filesystem scans (e.g.
+    // read_dir on XDG_RUNTIME_DIR) thousands of times per hour with no benefit.
 
     // 1. Wayland: Prioritize text/uri-list if available
     if std::env::var("WAYLAND_DISPLAY").is_ok() {

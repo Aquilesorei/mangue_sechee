@@ -178,7 +178,7 @@ fn handle_command(
                     if address.is_empty()
                         || single_peer
                         || p.address.as_deref().unwrap_or("") == address
-                        || address.contains(p.address.as_deref().unwrap_or("!@#$"))
+                        || p.address.as_deref().is_some_and(|a| !a.is_empty() && address.contains(a))
                         || p.address.as_deref().unwrap_or("").contains(&address)
                     {
                         p.position = pos_clean.clone();

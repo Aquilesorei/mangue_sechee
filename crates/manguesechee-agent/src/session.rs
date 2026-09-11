@@ -39,7 +39,9 @@ impl KnownPeers {
     }
 
     pub fn add(&mut self, id: String, name: String) {
-        if !self.contains(&id) {
+        if let Some(existing) = self.peers.iter_mut().find(|p| p.id == id) {
+            existing.name = name; // update in case peer was renamed (e.g. hostname changed)
+        } else {
             self.peers.push(KnownPeer { id, name });
         }
     }
@@ -109,10 +111,14 @@ pub fn prompt_accept(peer_name: &str, code: &str) -> bool {
 
 /// Show the outgoing code to the user (initiator side).
 pub fn show_outgoing_code(peer_name: &str, code: &str) {
-    info!("");
-    info!("Pairing with '{peer_name}' — verification code:");
-    info!("");
-    info!("        {code}");
-    info!("");
-    info!("Confirm this code matches on the remote machine.");
+    println!();
+    println!("┌──────────────────────────────────────────┐");
+    println!("│       Manguesechee — Pairing code         │");
+    println!("├──────────────────────────────────────────┤");
+    println!("│  Pairing with: {:<26}│", peer_name);
+    println!("│  Code:         {:<26}│", code);
+    println!("├──────────────────────────────────────────┤");
+    println!("│  Confirm this code matches on the remote  │");
+    println!("│  machine before proceeding.               │");
+    println!("└──────────────────────────────────────────┘");
 }

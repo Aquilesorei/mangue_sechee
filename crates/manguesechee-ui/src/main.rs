@@ -414,7 +414,7 @@ fn main() -> anyhow::Result<()> {
             let addr_str = addr.to_string();
             send_ipc(ipc::GuiCommand::ForgetPeer { address: addr_str.clone() });
             if let Ok(mut cfg) = config::load() {
-                cfg.peers.retain(|p| p.address.as_deref() != Some(&addr_str) && !addr_str.contains(p.address.as_deref().unwrap_or("!@#$")));
+                cfg.peers.retain(|p| p.address.as_deref() != Some(&addr_str) && !p.address.as_deref().is_some_and(|a| !a.is_empty() && addr_str.contains(a)));
                 let _ = config::save(&cfg);
             }
             let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();

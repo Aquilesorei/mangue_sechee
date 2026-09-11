@@ -35,7 +35,7 @@ pub async fn run(name: String, id: String, port: u16, state: SharedState) {
                             let pos = manguesechee_core::config::load().ok().and_then(|cfg| {
                                 cfg.peers.iter().find(|p| {
                                     p.address.as_deref().unwrap_or("").contains(&peer.address)
-                                        || peer.address.contains(p.address.as_deref().unwrap_or("!@#$"))
+                                        || p.address.as_deref().is_some_and(|a| !a.is_empty() && peer.address.contains(a))
                                         || p.id == peer.id
                                         || (!p.position.is_empty() && cfg.peers.len() == 1)
                                 }).map(|p| p.position.clone())

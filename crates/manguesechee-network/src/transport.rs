@@ -13,7 +13,7 @@ use tokio::{
     },
 };
 
-const MAX_FRAME: usize = 4 * 1024 * 1024; // 4 MiB sanity cap
+const MAX_FRAME: usize = 64 * 1024 * 1024; // 64 MiB — large enough for FileTransferOffer with thousands of entries
 
 // ── Shared framing helpers ────────────────────────────────────────────────────
 

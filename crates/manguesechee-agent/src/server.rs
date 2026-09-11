@@ -19,6 +19,7 @@ pub async fn run(
     local_id:      String,
     screen_width:  u32,
     screen_height: u32,
+    port:          u16,
     ipc_state:     crate::ipc_server::SharedState,
     connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
     broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
@@ -36,7 +37,7 @@ pub async fn run(
                 let tx = connect_tx.clone();
                 let b_tx = broadcast_tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle(stream, peer_addr, name, id, screen_width, screen_height, state, tx, b_tx).await {
+                    if let Err(e) = handle(stream, peer_addr, name, id, screen_width, screen_height, port, state, tx, b_tx).await {
                         error!("session error from {peer_addr}: {e:#}");
                     }
                 });
@@ -53,6 +54,7 @@ async fn handle(
     local_id:      String,
     screen_width:  u32,
     screen_height: u32,
+    port:          u16,
     ipc_state:     crate::ipc_server::SharedState,
     connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
     broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
@@ -114,7 +116,7 @@ async fn handle(
 
     // ── Auto-register peer & auto-connect bidirectional controller ───────────
     let peer_ip = peer_addr.ip().to_string();
-    let peer_target_addr = format!("{peer_ip}:24800");
+    let peer_target_addr = format!("{peer_ip}:{port}");
 
     let existing_pos = {
         let mut s = ipc_state.lock().unwrap();
@@ -157,7 +159,7 @@ async fn handle(
             let already_connected = ipc_state.lock().unwrap().connected_to.is_some();
             if !already_connected {
                 info!("Bidirectional auto-connect: initiating reverse controller connection to {peer_target_addr}");
-                let _ = connect_tx.send(peer_target_addr);
+                let _ = connect_tx.send(peer_target_addr.clone());
             }
         }
     }
@@ -193,7 +195,8 @@ async fn handle(
     }
 
     let mut broadcast_rx = broadcast_tx.subscribe();
-    let peer_target_addr = format!("{peer_ip}:24800");
+    // peer_target_addr already declared above; clone it for the send task
+    let peer_target_addr_send = peer_target_addr.clone();
     let ipc_state_for_send = Arc::clone(&ipc_state);
     tokio::spawn(async move {
         loop {
@@ -213,7 +216,7 @@ async fn handle(
                                         warn!("send fast file transfer failed: {e}");
                                     }
                                 } else if total_size <= bg_limit {
-                                    crate::file_transfer::spawn_background_sender(peer_target_addr.clone(), files, disk_paths, total_size, Arc::clone(&ipc_state_for_send));
+                                    crate::file_transfer::spawn_background_sender(peer_target_addr_send.clone(), files, disk_paths, total_size, Arc::clone(&ipc_state_for_send));
                                 }
                             } else {
                                 if let Err(e) = sender.send(&Message::ClipboardSync { text }).await { warn!("send: {e}"); break; }

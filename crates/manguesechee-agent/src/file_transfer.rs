@@ -8,6 +8,7 @@ use anyhow::Context;
 use manguesechee_core::ipc::{FileTransferInfo, TransferHistoryEntry};
 use manguesechee_core::protocol::{FileInfo, Message};
 use manguesechee_network::transport::{TcpSender, TcpTransport, Transport};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -36,7 +37,6 @@ pub fn sanitize_relative_path(path_str: &str) -> PathBuf {
 
 /// State tracking an in-flight file reception.
 pub struct ActiveReceiver {
-    pub transfer_id: String,
     pub files: Vec<FileInfo>,
     pub _staging_dir: PathBuf,
     pub disk_paths: Vec<PathBuf>,
@@ -82,7 +82,6 @@ impl ActiveReceiver {
         }
 
         Ok(Self {
-            transfer_id,
             files,
             _staging_dir: staging,
             disk_paths,
@@ -123,7 +122,7 @@ impl ActiveReceiver {
 /// Manages incoming transfers (both fast path on main socket and dedicated socket).
 #[derive(Default)]
 pub struct FileReceiver {
-    current: Option<ActiveReceiver>,
+    active: HashMap<String, ActiveReceiver>,
 }
 
 impl FileReceiver {
@@ -141,7 +140,7 @@ impl FileReceiver {
 
         match ActiveReceiver::new(transfer_id.clone(), files, total_size, is_background) {
             Ok(receiver) => {
-                self.current = Some(receiver);
+                self.active.insert(transfer_id.clone(), receiver);
                 let mut s = ipc_state.lock().unwrap();
                 s.active_transfers.retain(|t| t.transfer_id != transfer_id);
                 s.active_transfers.push(FileTransferInfo {
@@ -164,16 +163,14 @@ impl FileReceiver {
         data: &[u8],
         ipc_state: &SharedState,
     ) {
-        if let Some(rec) = self.current.as_mut() {
-            if rec.transfer_id == transfer_id {
-                if let Err(e) = rec.write_chunk(file_index, offset, data) {
-                    warn!("error writing chunk: {e}");
-                }
-                let bytes = rec.bytes_received;
-                let mut s = ipc_state.lock().unwrap();
-                if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
-                    t.bytes_transferred = bytes;
-                }
+        if let Some(rec) = self.active.get_mut(transfer_id) {
+            if let Err(e) = rec.write_chunk(file_index, offset, data) {
+                warn!("error writing chunk: {e}");
+            }
+            let bytes = rec.bytes_received;
+            let mut s = ipc_state.lock().unwrap();
+            if let Some(t) = s.active_transfers.iter_mut().find(|t| t.transfer_id == transfer_id) {
+                t.bytes_transferred = bytes;
             }
         }
     }
@@ -183,41 +180,40 @@ impl FileReceiver {
         transfer_id: &str,
         ipc_state: &SharedState,
     ) {
-        if let Some(rec) = self.current.take() {
-            if rec.transfer_id == transfer_id {
-                match rec.finish() {
-                    Ok((staged_paths, is_bg, first_name, total_bytes)) => {
-                        info!("file transfer complete: {} files staged", staged_paths.len());
-                        if let Err(e) = file_clipboard::set_file_clipboard(&staged_paths) {
-                            warn!("failed to set staged files in clipboard: {e}");
-                        }
-
-                        if is_bg {
-                            let size_str = file_clipboard::format_bytes(total_bytes);
-                            file_clipboard::show_notification(
-                                "Manguesechee",
-                                &format!("File ready to paste: {first_name} ({size_str})"),
-                            );
-                        }
-
-                        let mut s = ipc_state.lock().unwrap();
-                        s.active_transfers.retain(|t| t.transfer_id != transfer_id);
-                        s.transfer_history.insert(0, TransferHistoryEntry {
-                            filename: first_name,
-                            total_bytes,
-                            completed_at: current_timestamp(),
-                            is_receiving: true,
-                        });
-                        if s.transfer_history.len() > 15 {
-                            s.transfer_history.truncate(15);
-                        }
+        if let Some(rec) = self.active.remove(transfer_id) {
+            match rec.finish() {
+                Ok((staged_paths, is_bg, first_name, total_bytes)) => {
+                    info!("file transfer complete: {} files staged", staged_paths.len());
+                    if let Err(e) = file_clipboard::set_file_clipboard(&staged_paths) {
+                        warn!("failed to set staged files in clipboard: {e}");
                     }
-                    Err(e) => warn!("error finishing file transfer: {e}"),
+
+                    if is_bg {
+                        let size_str = file_clipboard::format_bytes(total_bytes);
+                        file_clipboard::show_notification(
+                            "Manguesechee",
+                            &format!("File ready to paste: {first_name} ({size_str})"),
+                        );
+                    }
+
+                    let mut s = ipc_state.lock().unwrap();
+                    s.active_transfers.retain(|t| t.transfer_id != transfer_id);
+                    s.transfer_history.insert(0, TransferHistoryEntry {
+                        filename: first_name,
+                        total_bytes,
+                        completed_at: current_timestamp(),
+                        is_receiving: true,
+                    });
+                    if s.transfer_history.len() > 15 {
+                        s.transfer_history.truncate(15);
+                    }
                 }
+                Err(e) => warn!("error finishing file transfer: {e}"),
             }
         }
     }
 }
+
 
 /// Send files <= 15 MB inline over the primary connection.
 pub async fn send_fast_transfer(
@@ -416,9 +412,10 @@ pub fn spawn_background_sender(
             });
         }
 
+        let mut stream_ok = false;
         match manguesechee_network::connect(&peer_addr).await {
             Ok(mut transport) => {
-                if let Err(e) = run_background_stream(
+                match run_background_stream(
                     &mut transport,
                     transfer_id.clone(),
                     files,
@@ -426,7 +423,8 @@ pub fn spawn_background_sender(
                     total_size,
                     &ipc_state,
                 ).await {
-                    warn!("background file transfer failed: {e:#}");
+                    Ok(()) => { stream_ok = true; }
+                    Err(e) => warn!("background file transfer failed: {e:#}"),
                 }
                 let _ = transport.close().await;
             }
@@ -435,14 +433,16 @@ pub fn spawn_background_sender(
 
         let mut s = ipc_state.lock().unwrap();
         s.active_transfers.retain(|t| t.transfer_id != transfer_id);
-        s.transfer_history.insert(0, TransferHistoryEntry {
-            filename: first_name,
-            total_bytes: total_size,
-            completed_at: current_timestamp(),
-            is_receiving: false,
-        });
-        if s.transfer_history.len() > 15 {
-            s.transfer_history.truncate(15);
+        if stream_ok {
+            s.transfer_history.insert(0, TransferHistoryEntry {
+                filename: first_name,
+                total_bytes: total_size,
+                completed_at: current_timestamp(),
+                is_receiving: false,
+            });
+            if s.transfer_history.len() > 15 {
+                s.transfer_history.truncate(15);
+            }
         }
     });
 }
@@ -520,6 +520,13 @@ pub async fn handle_incoming_file_channel(
     loop {
         match transport.receive().await {
             Ok(Message::FileTransferOffer { transfer_id, files, total_size, is_background }) => {
+                if transfer_id != init_transfer_id {
+                    warn!(
+                        "file channel: offer transfer_id {transfer_id:?} does not match \
+                         negotiated id {init_transfer_id:?} — ignoring"
+                    );
+                    continue;
+                }
                 receiver.handle_offer(transfer_id, files, total_size, is_background, &ipc_state);
             }
             Ok(Message::FileTransferChunk { transfer_id, file_index, offset, data, is_last_chunk: _ }) => {
@@ -539,7 +546,6 @@ pub async fn handle_incoming_file_channel(
         }
     }
 
-    let _ = init_transfer_id;
     Ok(())
 }
 

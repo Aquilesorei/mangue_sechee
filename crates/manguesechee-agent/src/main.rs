@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     let known_store = session::load_known_peers().unwrap_or_default();
     let initial_peers: Vec<manguesechee_core::ipc::PeerInfo> = cfg.peers.iter().filter_map(|p| {
         p.address.as_ref().map(|addr| {
-            let is_paired = known_store.contains(&p.id) || known_store.peers.iter().any(|kp| kp.name == p.id);
+            let is_paired = known_store.contains(&p.id);
             manguesechee_core::ipc::PeerInfo {
                 name: p.id.clone(),
                 address: addr.clone(),
@@ -182,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
         local_id,
         opts.screen_width,
         opts.screen_height,
+        opts.port,
         Arc::clone(&ipc_state),
         connect_tx.clone(),
         broadcast_tx.clone(),

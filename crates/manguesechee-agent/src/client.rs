@@ -104,7 +104,7 @@ pub async fn connect_to(
             p.position.clone()
         } else {
             let pos = manguesechee_core::config::load().ok().and_then(|cfg| {
-                cfg.peers.iter().find(|p| p.address.as_deref().unwrap_or("").contains(addr) || addr.contains(p.address.as_deref().unwrap_or("!@#$")) || p.id == peer_id)
+                cfg.peers.iter().find(|p| p.address.as_deref().unwrap_or("").contains(addr) || p.address.as_deref().is_some_and(|a| !a.is_empty() && addr.contains(a)) || p.id == peer_id)
                     .map(|p| p.position.clone())
             }).unwrap_or_else(|| "right".to_string());
 
@@ -124,7 +124,7 @@ pub async fn connect_to(
     };
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
-        if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(addr) || addr.contains(p.address.as_deref().unwrap_or("!@#$"))) {
+        if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(addr) || p.address.as_deref().is_some_and(|a| !a.is_empty() && addr.contains(a))) {
             cfg.peers.push(manguesechee_core::config::PeerConfig {
                 id: peer_id.clone(),
                 address: Some(addr.to_string()),
