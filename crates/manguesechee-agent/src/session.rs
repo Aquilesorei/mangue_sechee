@@ -111,14 +111,18 @@ pub fn prompt_accept(peer_name: &str, code: &str) -> bool {
 
 /// Show the outgoing code to the user (initiator side).
 pub fn show_outgoing_code(peer_name: &str, code: &str) {
-    println!();
-    println!("┌──────────────────────────────────────────┐");
-    println!("│       Manguesechee — Pairing code         │");
-    println!("├──────────────────────────────────────────┤");
-    println!("│  Pairing with: {:<26}│", peer_name);
-    println!("│  Code:         {:<26}│", code);
-    println!("├──────────────────────────────────────────┤");
-    println!("│  Confirm this code matches on the remote  │");
-    println!("│  machine before proceeding.               │");
-    println!("└──────────────────────────────────────────┘");
+    info!("Pairing with '{peer_name}' — verification code: {code}");
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        println!();
+        println!("┌──────────────────────────────────────────┐");
+        println!("│       Manguesechee — Pairing code         │");
+        println!("├──────────────────────────────────────────┤");
+        println!("│  Pairing with: {:<26}│", peer_name);
+        println!("│  Code:         {:<26}│", code);
+        println!("├──────────────────────────────────────────┤");
+        println!("│  Confirm this code matches on the remote  │");
+        println!("│  machine before proceeding.               │");
+        println!("└──────────────────────────────────────────┘");
+    }
 }
