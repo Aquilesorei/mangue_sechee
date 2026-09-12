@@ -26,9 +26,14 @@ pub enum GuiCommand {
     Disconnect,
     SetDiscovery { enabled: bool },
     SetFileTransfer { enabled: bool },
+    SetTls { enabled: bool },
     SetCursorLock { locked: bool },
+    ToggleCursorLock,
+    SwitchScreen,
     ForgetPeer { address: String },
     SyncTopology { address: String, position: String },
+    SyncTopologyGrid { address: String, grid_x: i32, grid_y: i32 },
+    SetEdgeResistance { delay_ms: u32 },
     Shutdown,
 }
 
@@ -41,7 +46,13 @@ pub enum AgentEvent {
         discovery:             bool,
         #[serde(default = "default_true")]
         file_transfer_enabled: bool,
+        #[serde(default)]
+        tls_enabled:           bool,
+        #[serde(default)]
+        tls_active:            bool,
         cursor_locked:         bool,
+        #[serde(default)]
+        edge_delay_ms:         u32,
         last_error:            Option<String>,
         topology_configured:   bool,
         peers:                 Vec<PeerInfo>,
@@ -54,13 +65,39 @@ pub enum AgentEvent {
     Error { message: String },
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PeerInfo {
     pub name:      String,
     pub address:   String,
     pub paired:    bool,
     pub connected: bool,
     pub position:  String,
+    #[serde(default)]
+    pub grid_x:    i32,
+    #[serde(default)]
+    pub grid_y:    i32,
+}
+
+impl PeerInfo {
+    pub fn new(name: impl Into<String>, address: impl Into<String>, paired: bool, connected: bool, position: impl Into<String>) -> Self {
+        let pos = position.into();
+        let (gx, gy) = match pos.to_lowercase().as_str() {
+            "left" => (-1, 0),
+            "right" => (1, 0),
+            "above" | "top" => (0, 1),
+            "below" | "bottom" => (0, -1),
+            _ => (1, 0),
+        };
+        Self {
+            name: name.into(),
+            address: address.into(),
+            paired,
+            connected,
+            position: pos,
+            grid_x: gx,
+            grid_y: gy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

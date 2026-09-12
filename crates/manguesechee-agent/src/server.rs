@@ -61,18 +61,50 @@ async fn handle(
 ) -> anyhow::Result<()> {
     let mut transport = wrap(stream);
 
-    // ── Secondary data channel or control identity ────────────────────────────
+    // ── TLS Upgrade Negotiation ────────────────────────────────────────────────
     let first_msg = transport.receive().await?;
     let (_peer_name, peer_id) = match first_msg {
+        Message::StartTls { requested } => {
+            let local_tls_enabled = ipc_state.lock().unwrap().tls_enabled;
+            let should_accept = requested && local_tls_enabled;
+            transport.send(&Message::StartTlsAck { accept: should_accept }).await?;
+            if should_accept {
+                info!("upgrading incoming connection from {peer_addr} to TLS");
+                let (certs, key) = manguesechee_network::tls::load_or_generate_identity(&local_name)?;
+                let server_config = manguesechee_network::tls::create_server_config(certs, key)?;
+                transport.upgrade_to_tls_server(server_config).await?;
+                info!("🔒 TLS encryption established with incoming peer {peer_addr}");
+                ipc_state.lock().unwrap().tls_active = true;
+            } else {
+                if requested && !local_tls_enabled {
+                    info!("peer requested TLS, but local TLS is disabled; continuing unencrypted");
+                }
+                ipc_state.lock().unwrap().tls_active = false;
+            }
+
+            match transport.receive().await? {
+                Message::FileChannelInit { transfer_id } => {
+                    info!("incoming dedicated file channel from {peer_addr} (transfer {transfer_id})");
+                    return crate::file_transfer::handle_incoming_file_channel(transport, transfer_id, ipc_state).await;
+                }
+                Message::Identity { name, id } => {
+                    info!("peer: name={name} id={id}");
+                    (name, id)
+                }
+                other => anyhow::bail!("expected Identity or FileChannelInit after TLS negotiation, got {other:?}"),
+            }
+        }
         Message::FileChannelInit { transfer_id } => {
+            ipc_state.lock().unwrap().tls_active = false;
             info!("incoming dedicated file channel from {peer_addr} (transfer {transfer_id})");
             return crate::file_transfer::handle_incoming_file_channel(transport, transfer_id, ipc_state).await;
         }
         Message::Identity { name, id } => {
+            ipc_state.lock().unwrap().tls_active = false;
             info!("peer: name={name} id={id}");
             (name, id)
         }
-        other => anyhow::bail!("expected Identity or FileChannelInit, got {other:?}"),
+        other => anyhow::bail!("expected StartTls or Identity or FileChannelInit, got {other:?}"),
     };
     transport.send(&Message::Identity { name: local_name.clone(), id: local_id.clone() }).await?;
 
@@ -132,24 +164,24 @@ async fn handle(
                     .map(|p| p.position.clone())
             }).unwrap_or_else(|| "right".to_string());
 
-            s.peers.push(manguesechee_core::ipc::PeerInfo {
-                name: _peer_name.clone(),
-                address: peer_target_addr.clone(),
-                paired: true,
-                connected: false,
-                position: pos.clone(),
-            });
+            s.peers.push(manguesechee_core::ipc::PeerInfo::new(
+                _peer_name.clone(),
+                peer_target_addr.clone(),
+                true,
+                false,
+                pos.clone(),
+            ));
             pos
         }
     };
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
         if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(&peer_ip)) {
-            cfg.peers.push(manguesechee_core::config::PeerConfig {
-                id: peer_id.clone(),
-                address: Some(peer_target_addr.clone()),
-                position: existing_pos,
-            });
+            cfg.peers.push(manguesechee_core::config::PeerConfig::new(
+                peer_id.clone(),
+                Some(peer_target_addr.clone()),
+                existing_pos,
+            ));
             let _ = manguesechee_core::config::save(&cfg);
         }
 
@@ -267,12 +299,19 @@ async fn handle(
                           file_receiver: &mut crate::file_transfer::FileReceiver,
                           out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
         match msg {
-            Message::EdgeCrossed { edge: entry } => {
+            Message::EdgeCrossed { edge: entry, ratio } => {
                 let return_edge = entry.opposite();
-                edge.set_allowed_edge(Some(return_edge));
-                edge.place_at_entry(&return_edge);
+                edge.set_allowed_edge(None);
+                edge.place_at_entry_ratio(&return_edge, ratio);
                 *has_control = true;
-                info!("cursor entered from {return_edge:?} (controller exited {entry:?}) — return edge restricted to {return_edge:?}");
+                info!("cursor entered from {return_edge:?} (controller exited {entry:?}, ratio={ratio:?}) — multi-directional navigation enabled");
+            }
+
+            Message::ReturnControl { edge, ratio: _ } => {
+                *has_control = false;
+                let _ = mouse.release_all();
+                let _ = keyboard.release_all();
+                info!("controller reclaimed control via ReturnControl ({edge:?}) — released all virtual keys & mouse buttons");
             }
 
             Message::InputEvent(event) => {
@@ -284,7 +323,8 @@ async fn handle(
                 if let InputEvent::MouseMove { dx, dy } = &event {
                     if let Some(exit) = edge.update(*dx, *dy) {
                         *has_control = false;
-                        info!("cursor left via {exit:?} — ReturnControl");
+                        let ratio = edge.current_ratio(exit);
+                        info!("cursor left via {exit:?} (ratio={ratio:.2}) — ReturnControl");
                         let _ = mouse.release_all();
                         let _ = keyboard.release_all();
                         // Immediate clipboard sync on returning control to controller
@@ -296,7 +336,7 @@ async fn handle(
                                 }
                             }
                         }
-                        let _ = out_tx.try_send(Message::ReturnControl { edge: exit });
+                        let _ = out_tx.try_send(Message::ReturnControl { edge: exit, ratio: Some(ratio) });
                         return Ok(true);
                     }
                 }
@@ -420,5 +460,6 @@ async fn handle(
     let _ = keyboard.release_all();
     // Allow compositor and kernel time to flush key-up and button-up events before device destruction
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    ipc_state.lock().unwrap().tls_active = false;
     Ok(())
 }

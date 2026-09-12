@@ -20,6 +20,8 @@ serde_json         = { workspace = true }
 dirs               = { workspace = true }
 manguesechee-input = { workspace = true }
 arboard            = { workspace = true }
+ksni               = { workspace = true }
+image              = { version = "0.25", default-features = false, features = ["png"] }
 
 
 [build-dependencies]

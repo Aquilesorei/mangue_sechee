@@ -5,11 +5,14 @@ export component HeaderBar inherits Rectangle {
     in property <string> status: "Ready";
     in property <bool> is-service-running: true;
     in property <bool> cursor-locked: false;
+    in property <bool> tls-active: false;
+    in property <string> connected-peer: "";
 
     callback toggle-cursor-lock();
     callback start-service();
     callback stop-service();
     callback restart-service();
+    callback hide-to-tray();
 
     height: 52px;
     background: #181926;
@@ -27,6 +30,23 @@ export component HeaderBar inherits Rectangle {
         }
 
         Rectangle { horizontal-stretch: 1; }
+
+        // TLS Security Pill (when connected)
+        if root.connected-peer != "" : Rectangle {
+            background: root.tls-active ? #0e3020 : #30200e;
+            border-radius: 12px; height: 28px;
+            border-width: 1px;
+            border-color: root.tls-active ? #22c55e : #f59e0b;
+            HorizontalBox {
+                padding-left: 10px; padding-right: 10px; spacing: 4px;
+                Text {
+                    text: root.tls-active ? "🔒 TLS Encrypted" : "🔓 Unencrypted";
+                    font-size: 11px; font-weight: 600;
+                    color: root.tls-active ? #4ade80 : #fbbf24;
+                    vertical-alignment: center;
+                }
+            }
+        }
 
         // Status Badge
         Rectangle {
@@ -53,6 +73,12 @@ export component HeaderBar inherits Rectangle {
             primary: root.cursor-locked;
             enabled: root.is-service-running;
             clicked => { root.toggle-cursor-lock(); }
+        }
+
+        // Minimize to Tray Button
+        Button {
+            text: "📥 Hide to Tray";
+            clicked => { root.hide-to-tray(); }
         }
 
         // Live Service Controls (Start, Stop, Restart)

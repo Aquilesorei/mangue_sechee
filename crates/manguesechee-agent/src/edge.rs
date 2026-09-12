@@ -17,7 +17,7 @@ pub struct EdgeDetector {
     contact_start:      Option<(Edge, Instant)>,
     locked:             bool,
     allowed_edge:       Option<Edge>,
-    entry_cooldown:     Option<Instant>,
+    entry_cooldown:     Option<(Instant, Duration)>,
     velocity_threshold: f64,
 }
 
@@ -53,6 +53,20 @@ impl EdgeDetector {
     }
 
     #[allow(dead_code)]
+    pub fn x(&self) -> f64 { self.x }
+    #[allow(dead_code)]
+    pub fn y(&self) -> f64 { self.y }
+    #[allow(dead_code)]
+    pub fn width(&self) -> f64 { self.width }
+    #[allow(dead_code)]
+    pub fn height(&self) -> f64 { self.height }
+
+    #[allow(dead_code)]
+    pub fn set_switch_delay(&mut self, delay: Duration) {
+        self.switch_delay = delay;
+    }
+
+    #[allow(dead_code)]
     pub fn set_velocity_threshold(&mut self, threshold: u32) {
         self.velocity_threshold = threshold as f64;
     }
@@ -68,20 +82,82 @@ impl EdgeDetector {
         }
     }
 
-    /// Position the cursor at the entry point for an incoming crossing.
+    /// Calculate normalized perpendicular position (0.0 ..= 1.0) along the edge.
+    /// For Left/Right edges: ratio is y / height.
+    /// For Top/Bottom edges: ratio is x / width.
+    pub fn current_ratio(&self, edge: Edge) -> f32 {
+        match edge {
+            Edge::Left | Edge::Right => {
+                if self.height > 1.0 {
+                    ((self.y / (self.height - 1.0)) as f32).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                }
+            }
+            Edge::Top | Edge::Bottom => {
+                if self.width > 1.0 {
+                    ((self.x / (self.width - 1.0)) as f32).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                }
+            }
+        }
+    }
+
+    /// Arm a temporary cooldown during which edge transitions are suppressed
+    /// (e.g. after hotkey jumps to prevent sensor jitter from fighting focus).
+    pub fn arm_cooldown(&mut self, duration: Duration) {
+        self.contact_start = None;
+        self.entry_cooldown = Some((Instant::now(), duration));
+    }
+
+    /// Position the cursor at the entry point for an incoming crossing,
+    /// optionally preserving the normalized perpendicular ratio from the source screen.
     /// Leaves a comfortable margin inside the screen and arms a 400ms cooldown
     /// to prevent cursor bounce-back from entry jitter or touchpad inertia.
-    pub fn place_at_entry(&mut self, from_edge: &Edge) {
+    pub fn place_at_entry_ratio(&mut self, from_edge: &Edge, ratio: Option<f32>) {
         let margin_x = (self.width * 0.05).clamp(80.0, 150.0);
         let margin_y = (self.height * 0.05).clamp(80.0, 150.0);
         match from_edge {
-            Edge::Right  => self.x = (self.width - margin_x).max(0.0),
-            Edge::Left   => self.x = margin_x.min(self.width - 1.0),
-            Edge::Bottom => self.y = (self.height - margin_y).max(0.0),
-            Edge::Top    => self.y = margin_y.min(self.height - 1.0),
+            Edge::Right => {
+                self.x = (self.width - margin_x).max(0.0);
+                if let Some(r) = ratio {
+                    self.y = (r as f64 * (self.height - 1.0)).clamp(0.0, self.height - 1.0);
+                }
+            }
+            Edge::Left => {
+                self.x = margin_x.min(self.width - 1.0);
+                if let Some(r) = ratio {
+                    self.y = (r as f64 * (self.height - 1.0)).clamp(0.0, self.height - 1.0);
+                }
+            }
+            Edge::Bottom => {
+                self.y = (self.height - margin_y).max(0.0);
+                if let Some(r) = ratio {
+                    self.x = (r as f64 * (self.width - 1.0)).clamp(0.0, self.width - 1.0);
+                }
+            }
+            Edge::Top => {
+                self.y = margin_y.min(self.height - 1.0);
+                if let Some(r) = ratio {
+                    self.x = (r as f64 * (self.width - 1.0)).clamp(0.0, self.width - 1.0);
+                }
+            }
         }
         self.contact_start = None;
-        self.entry_cooldown = Some(Instant::now());
+        self.entry_cooldown = Some((Instant::now(), Duration::from_millis(400)));
+    }
+
+    pub fn place_at_entry(&mut self, from_edge: &Edge) {
+        self.place_at_entry_ratio(from_edge, None);
+    }
+
+    /// Position the cursor at the center of the screen (e.g. for teleport jump or emergency breakout).
+    pub fn place_at_center(&mut self) {
+        self.x = self.width / 2.0;
+        self.y = self.height / 2.0;
+        self.contact_start = None;
+        self.entry_cooldown = Some((Instant::now(), Duration::from_millis(400)));
     }
 
     /// Apply a relative mouse delta.
@@ -151,8 +227,8 @@ impl EdgeDetector {
         }
 
         // Check entry cooldown to avoid immediately bouncing back through entry edge
-        if let Some(cooldown_start) = self.entry_cooldown {
-            if cooldown_start.elapsed() < Duration::from_millis(400) {
+        if let Some((cooldown_start, cooldown_dur)) = self.entry_cooldown {
+            if cooldown_start.elapsed() < cooldown_dur {
                 let margin_x = (self.width * 0.05).clamp(80.0, 150.0);
                 let margin_y = (self.height * 0.05).clamp(80.0, 150.0);
                 if let Some(c) = candidate {
@@ -351,5 +427,34 @@ mod tests {
         // Slow movement crosses immediately because threshold is 0 (disabled)
         let crossed = detector.update(15, 0);
         assert_eq!(crossed, Some(Edge::Right));
+    }
+
+    #[test]
+    fn test_place_at_entry_ratio_proportional_resolution() {
+        // Source is 4K (3840x2160), exited at Y = 1080 (50% down, ratio = 0.5)
+        // Destination is 1080p (1920x1080)
+        let mut dest_detector = EdgeDetector::new(1920, 1080);
+        dest_detector.place_at_entry_ratio(&Edge::Left, Some(0.5));
+
+        // Margin on X axis is 5% inside
+        let expected_margin = (1920.0_f64 * 0.05).clamp(80.0, 150.0);
+        assert_eq!(dest_detector.x, expected_margin);
+        // Y coordinate lands precisely at 50% height of 1080p screen (1079 * 0.5)
+        assert!((dest_detector.y - 539.5).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_hotkey_cooldown_suppression() {
+        let mut detector = EdgeDetector::new(1920, 1080);
+        // Teleport to center upon hotkey jump
+        detector.place_at_center();
+        assert_eq!(detector.x, 960.0);
+        assert_eq!(detector.y, 540.0);
+
+        // Arm cooldown of 300ms
+        detector.arm_cooldown(Duration::from_millis(300));
+        // High speed fling towards edge during cooldown is suppressed
+        let crossed = detector.update(2000, 0);
+        assert_eq!(crossed, None);
     }
 }

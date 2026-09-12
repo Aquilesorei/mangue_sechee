@@ -1,6 +1,8 @@
-import { Button, VerticalBox, HorizontalBox, ComboBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { PeerEntry } from "../types.slint";
 
 export component TopologyView inherits VerticalBox {
+    in property <[PeerEntry]> peers: [];
     in property <string> connected-peer: "";
     in-out property <string> setting-peer-pos: "right";
     in property <string> local-name: "";
@@ -11,106 +13,306 @@ export component TopologyView inherits VerticalBox {
     in property <string> settings-feedback: "";
 
     callback save-topology(string);
+    callback save-topology-grid(string, int, int);
 
-    spacing: 16px;
+    spacing: 14px;
     vertical-stretch: 1;
 
-    Text {
-        text: "Configure the physical arrangement of your screens. Moving your mouse past this screen's edge transfers control to the peer. Changes automatically synchronize bidirectionally with the connected peer over the network.";
-        color: #8e90a6; font-size: 13px; wrap: word-wrap;
+    in-out property <int> peer1-x: root.peers.length > 0 ? root.peers[0].grid-x : (root.setting-peer-pos == "left" ? -1 : (root.setting-peer-pos == "above" ? 0 : (root.setting-peer-pos == "below" ? 0 : 1)));
+    in-out property <int> peer1-y: root.peers.length > 0 ? root.peers[0].grid-y : (root.setting-peer-pos == "above" ? 1 : (root.setting-peer-pos == "below" ? -1 : 0));
+    in-out property <int> peer2-x: root.peers.length > 1 ? root.peers[1].grid-x : 999;
+    in-out property <int> peer2-y: root.peers.length > 1 ? root.peers[1].grid-y : 999;
+    in-out property <int> peer3-x: root.peers.length > 2 ? root.peers[2].grid-x : 999;
+    in-out property <int> peer3-y: root.peers.length > 2 ? root.peers[2].grid-y : 999;
+    in-out property <int> peer4-x: root.peers.length > 3 ? root.peers[3].grid-x : 999;
+    in-out property <int> peer4-y: root.peers.length > 3 ? root.peers[3].grid-y : 999;
+
+    function has-peer(x: int, y: int) -> bool {
+        (x == root.peer1-x && y == root.peer1-y)
+        || (x == root.peer2-x && y == root.peer2-y)
+        || (x == root.peer3-x && y == root.peer3-y)
+        || (x == root.peer4-x && y == root.peer4-y)
     }
 
-    // Visual Monitor Placement Grid
-    Rectangle {
-        height: 260px; background: #181926; border-radius: 8px;
-        VerticalBox {
-            padding: 16px; spacing: 10px; alignment: center;
+    function peer-name-at(x: int, y: int) -> string {
+        if x == root.peer1-x && y == root.peer1-y {
+            return root.peers.length > 0 && root.peers[0].name != "" ? root.peers[0].name : (root.connected-peer != "" ? root.connected-peer : "Peer 1");
+        }
+        if x == root.peer2-x && y == root.peer2-y {
+            return root.peers.length > 1 && root.peers[1].name != "" ? root.peers[1].name : "Peer 2";
+        }
+        if x == root.peer3-x && y == root.peer3-y {
+            return root.peers.length > 2 && root.peers[2].name != "" ? root.peers[2].name : "Peer 3";
+        }
+        if x == root.peer4-x && y == root.peer4-y {
+            return root.peers.length > 3 && root.peers[3].name != "" ? root.peers[3].name : "Peer 4";
+        }
+        return "";
+    }
 
-            // Top Slot
+    function peer-addr-at(x: int, y: int) -> string {
+        if x == root.peer1-x && y == root.peer1-y {
+            return root.peers.length > 0 ? root.peers[0].address : root.connected-peer;
+        }
+        if x == root.peer2-x && y == root.peer2-y {
+            return root.peers.length > 1 ? root.peers[1].address : "";
+        }
+        if x == root.peer3-x && y == root.peer3-y {
+            return root.peers.length > 2 ? root.peers[2].address : "";
+        }
+        if x == root.peer4-x && y == root.peer4-y {
+            return root.peers.length > 3 ? root.peers[3].address : "";
+        }
+        return root.connected-peer;
+    }
+
+    // Header Explanation & Hotkey Hint
+    Rectangle {
+        background: #181926; border-radius: 8px; border-width: 1px; border-color: #2e3046;
+        VerticalBox {
+            padding: 12px; spacing: 6px;
             HorizontalBox {
-                alignment: center;
+                spacing: 8px;
+                Text { text: "🗺️ Spatial 2D Grid Topology"; font-size: 15px; font-weight: 700; color: #f0f0ff; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "Focus Traversal: Mouse Edge & Ctrl+Alt+Arrows"; font-size: 11px; font-weight: 600; color: #818cf8; }
+            }
+            Text {
+                text: "Arrange machines on a 2D coordinate grid relative to This Machine (0, 0). Move your cursor across screen boundaries to seamlessly hop between laptops, or hold Ctrl + Alt and tap Arrow Keys (e.g. Right ➔ Right) to traverse stacked screens!";
+                color: #9496b0; font-size: 12px; wrap: word-wrap;
+            }
+        }
+    }
+
+    // ── 2D SPATIAL GRID DESK CANVAS ──────────────────────────────────────────
+    Rectangle {
+        background: #131420; border-radius: 10px; border-width: 1px; border-color: #27293d;
+        height: 310px;
+
+        VerticalBox {
+            padding: 14px; spacing: 10px; alignment: center;
+
+            // ── ROW 1: TOP ROW (Y = +1) ──
+            HorizontalBox {
+                alignment: center; spacing: 10px;
+
+                // Slot (-1, 1): Top-Left Diagonal
                 Rectangle {
-                    width: 140px; height: 50px; border-radius: 6px;
-                    background: root.setting-peer-pos == "above" ? #3b82f6 : #232536;
-                    Text {
-                        text: root.setting-peer-pos == "above" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Above)") : "Top Edge";
-                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    width: 120px; height: 62px; border-radius: 6px;
+                    background: root.has-peer(-1, 1) ? #2563eb : #1e1f2f;
+                    border-width: 1px; border-color: root.has-peer(-1, 1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(-1, 1) ? "💻 " + root.peer-name-at(-1, 1) : "+ Top-Left"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(-1, 1)"; font-size: 9px; color: root.has-peer(-1, 1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
                     }
-                    TouchArea { clicked => { root.setting-peer-pos = "above"; root.save-topology("above"); } }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(-1, 1), -1, 1); } }
+                }
+
+                // Slot (0, 1): TOP / ABOVE
+                Rectangle {
+                    width: 150px; height: 68px; border-radius: 6px;
+                    background: root.has-peer(0, 1) ? #2563eb : (root.setting-peer-pos == "above" ? #1d4ed8 : #1e1f2f);
+                    border-width: 1px; border-color: root.has-peer(0, 1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(0, 1) ? "💻 " + root.peer-name-at(0, 1) : "⬆️ Top / Above"; font-size: 12px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(0, 1)"; font-size: 10px; color: root.has-peer(0, 1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(0, 1) : HorizontalBox {
+                            alignment: center; spacing: 6px;
+                            Button { text: "⬇️"; clicked => { root.save-topology-grid(root.peer-addr-at(0, 1), 0, 0); } }
+                            Button { text: "⬆️"; clicked => { root.save-topology-grid(root.peer-addr-at(0, 1), 0, 2); } }
+                        }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(0, 1), 0, 1); root.save-topology("above"); } }
+                }
+
+                // Slot (1, 1): Top-Right Diagonal
+                Rectangle {
+                    width: 120px; height: 62px; border-radius: 6px;
+                    background: root.has-peer(1, 1) ? #2563eb : #1e1f2f;
+                    border-width: 1px; border-color: root.has-peer(1, 1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(1, 1) ? "💻 " + root.peer-name-at(1, 1) : "+ Top-Right"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(1, 1)"; font-size: 9px; color: root.has-peer(1, 1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(1, 1), 1, 1); } }
                 }
             }
 
-            // Middle Row: Left Slot | THIS SCREEN | Right Slot
+            // ── ROW 2: CENTER ROW (Y = 0) ──
             HorizontalBox {
-                alignment: center; spacing: 12px;
+                alignment: center; spacing: 10px;
 
-                // Left Slot
+                // Slot (-2, 0): Far Left (Stacked 2)
                 Rectangle {
-                    width: 130px; height: 80px; border-radius: 6px;
-                    background: root.setting-peer-pos == "left" ? #3b82f6 : #232536;
-                    Text {
-                        text: root.setting-peer-pos == "left" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Left)") : "Left Edge";
-                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    width: 115px; height: 78px; border-radius: 6px;
+                    background: root.has-peer(-2, 0) ? #2563eb : #1a1b2a;
+                    border-width: 1px; border-color: root.has-peer(-2, 0) ? #60a5fa : #272a3d;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(-2, 0) ? "💻 " + root.peer-name-at(-2, 0) : "+ Left 2"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(-2, 0)"; font-size: 9px; color: root.has-peer(-2, 0) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(-2, 0) : Button { text: "➡️ Move In"; clicked => { root.save-topology-grid(root.peer-addr-at(-2, 0), -1, 0); } }
                     }
-                    TouchArea { clicked => { root.setting-peer-pos = "left"; root.save-topology("left"); } }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(-2, 0), -2, 0); } }
                 }
 
-                // Central Screen (This Machine)
+                // Slot (-1, 0): Left 1
                 Rectangle {
-                    width: 190px; height: 100px; border-radius: 8px;
-                    background: #4f46e5; border-width: 2px; border-color: #818cf8;
+                    width: 125px; height: 86px; border-radius: 6px;
+                    background: root.has-peer(-1, 0) ? #2563eb : (root.setting-peer-pos == "left" ? #1d4ed8 : #1e1f2f);
+                    border-width: 1px; border-color: root.has-peer(-1, 0) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(-1, 0) ? "💻 " + root.peer-name-at(-1, 0) : "⬅️ Left Screen"; font-size: 12px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(-1, 0)"; font-size: 10px; color: root.has-peer(-1, 0) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(-1, 0) : HorizontalBox {
+                            alignment: center; spacing: 4px;
+                            Button { text: "⬅️ Stack"; clicked => { root.save-topology-grid(root.peer-addr-at(-1, 0), -2, 0); } }
+                            Button { text: "➡️ (0,0)"; clicked => { root.save-topology-grid(root.peer-addr-at(-1, 0), 1, 0); } }
+                        }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(-1, 0), -1, 0); root.save-topology("left"); } }
+                }
+
+                // Slot (0, 0): THIS MACHINE (CONTROLLER)
+                Rectangle {
+                    width: 185px; height: 96px; border-radius: 8px;
+                    background: #4338ca; border-width: 2px; border-color: #818cf8;
                     VerticalBox {
                         alignment: center; spacing: 3px;
-                        Text { text: "🖥️ " + root.local-name; font-size: 14px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
-                        Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #a5b4fc; horizontal-alignment: center; }
-                        Text { text: root.setting-width + "×" + root.setting-height; font-size: 11px; color: #e0e7ff; horizontal-alignment: center; }
+                        Text { text: "🖥️ " + root.local-name; font-size: 13px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Rectangle {
+                            height: 18px; width: 120px; border-radius: 9px; background: #312e81;
+                            Text { text: "Controller (0, 0)"; font-size: 10px; font-weight: 700; color: #c7d2fe; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { text: root.local-ip + ":" + root.setting-port; font-size: 10px; font-weight: 600; color: #a5b4fc; horizontal-alignment: center; }
+                        Text { text: root.setting-width + "×" + root.setting-height; font-size: 10px; color: #e0e7ff; horizontal-alignment: center; }
                     }
                 }
 
-                // Right Slot
+                // Slot (1, 0): Right 1
                 Rectangle {
-                    width: 130px; height: 80px; border-radius: 6px;
-                    background: root.setting-peer-pos == "right" ? #3b82f6 : #232536;
-                    Text {
-                        text: root.setting-peer-pos == "right" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Right)") : "Right Edge";
-                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    width: 125px; height: 86px; border-radius: 6px;
+                    background: root.has-peer(1, 0) ? #2563eb : (root.setting-peer-pos == "right" ? #1d4ed8 : #1e1f2f);
+                    border-width: 1px; border-color: root.has-peer(1, 0) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(1, 0) ? "💻 " + root.peer-name-at(1, 0) : "➡️ Right Screen"; font-size: 12px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(1, 0)"; font-size: 10px; color: root.has-peer(1, 0) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(1, 0) : HorizontalBox {
+                            alignment: center; spacing: 4px;
+                            Button { text: "⬅️ (0,0)"; clicked => { root.save-topology-grid(root.peer-addr-at(1, 0), -1, 0); } }
+                            Button { text: "➡️ Stack"; clicked => { root.save-topology-grid(root.peer-addr-at(1, 0), 2, 0); } }
+                        }
                     }
-                    TouchArea { clicked => { root.setting-peer-pos = "right"; root.save-topology("right"); } }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(1, 0), 1, 0); root.save-topology("right"); } }
+                }
+
+                // Slot (2, 0): Far Right (Stacked 2)
+                Rectangle {
+                    width: 115px; height: 78px; border-radius: 6px;
+                    background: root.has-peer(2, 0) ? #2563eb : #1a1b2a;
+                    border-width: 1px; border-color: root.has-peer(2, 0) ? #60a5fa : #272a3d;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(2, 0) ? "💻 " + root.peer-name-at(2, 0) : "+ Right 2"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(2, 0)"; font-size: 9px; color: root.has-peer(2, 0) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(2, 0) : Button { text: "⬅️ Move In"; clicked => { root.save-topology-grid(root.peer-addr-at(2, 0), 1, 0); } }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(2, 0), 2, 0); } }
                 }
             }
 
-            // Bottom Slot
+            // ── ROW 3: BOTTOM ROW (Y = -1) ──
             HorizontalBox {
-                alignment: center;
+                alignment: center; spacing: 10px;
+
+                // Slot (-1, -1): Bottom-Left Diagonal
                 Rectangle {
-                    width: 140px; height: 50px; border-radius: 6px;
-                    background: root.setting-peer-pos == "below" ? #3b82f6 : #232536;
-                    Text {
-                        text: root.setting-peer-pos == "below" ? (root.connected-peer != "" ? root.connected-peer : "Peer (Below)") : "Bottom Edge";
-                        color: #ffffff; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center;
+                    width: 120px; height: 62px; border-radius: 6px;
+                    background: root.has-peer(-1, -1) ? #2563eb : #1e1f2f;
+                    border-width: 1px; border-color: root.has-peer(-1, -1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(-1, -1) ? "💻 " + root.peer-name-at(-1, -1) : "+ Bottom-Left"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(-1, -1)"; font-size: 9px; color: root.has-peer(-1, -1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
                     }
-                    TouchArea { clicked => { root.setting-peer-pos = "below"; root.save-topology("below"); } }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(-1, -1), -1, -1); } }
+                }
+
+                // Slot (0, -1): BOTTOM / BELOW
+                Rectangle {
+                    width: 150px; height: 68px; border-radius: 6px;
+                    background: root.has-peer(0, -1) ? #2563eb : (root.setting-peer-pos == "below" ? #1d4ed8 : #1e1f2f);
+                    border-width: 1px; border-color: root.has-peer(0, -1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(0, -1) ? "💻 " + root.peer-name-at(0, -1) : "⬇️ Bottom / Below"; font-size: 12px; font-weight: 700; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(0, -1)"; font-size: 10px; color: root.has-peer(0, -1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                        if root.has-peer(0, -1) : HorizontalBox {
+                            alignment: center; spacing: 6px;
+                            Button { text: "⬆️"; clicked => { root.save-topology-grid(root.peer-addr-at(0, -1), 0, 0); } }
+                            Button { text: "⬇️"; clicked => { root.save-topology-grid(root.peer-addr-at(0, -1), 0, -2); } }
+                        }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(0, -1), 0, -1); root.save-topology("below"); } }
+                }
+
+                // Slot (1, -1): Bottom-Right Diagonal
+                Rectangle {
+                    width: 120px; height: 62px; border-radius: 6px;
+                    background: root.has-peer(1, -1) ? #2563eb : #1e1f2f;
+                    border-width: 1px; border-color: root.has-peer(1, -1) ? #60a5fa : #2f3248;
+                    VerticalBox {
+                        alignment: center; spacing: 2px;
+                        Text { text: root.has-peer(1, -1) ? "💻 " + root.peer-name-at(1, -1) : "+ Bottom-Right"; font-size: 11px; font-weight: 600; color: #ffffff; horizontal-alignment: center; }
+                        Text { text: "(1, -1)"; font-size: 9px; color: root.has-peer(1, -1) ? #bfdbfe : #6b7280; horizontal-alignment: center; }
+                    }
+                    TouchArea { clicked => { root.save-topology-grid(root.peer-addr-at(1, -1), 1, -1); } }
                 }
             }
         }
     }
 
-    // Selector & Save Control
+    // ── QUICK LAYOUT PRESETS ─────────────────────────────────────────────────
     HorizontalBox {
-        spacing: 12px;
-        Text { text: "Select Peer Screen Location:"; color: #b4b7d6; font-size: 14px; font-weight: 600; vertical-alignment: center; }
-        ComboBox {
-            model: ["Right", "Left", "Above", "Below"];
-            current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
-            selected => {
-                root.setting-peer-pos = self.current-value.to-lowercase();
-                root.save-topology(root.setting-peer-pos);
+        spacing: 8px;
+        Text { text: "Quick Presets:"; font-size: 12px; font-weight: 600; color: #9ca3af; vertical-alignment: center; }
+        Button {
+            text: "👉 Right (1, 0)";
+            clicked => {
+                root.setting-peer-pos = "right";
+                root.save-topology-grid(root.connected-peer, 1, 0);
             }
         }
-        Rectangle { horizontal-stretch: 1; }
         Button {
-            text: "Save Topology"; primary: true;
-            clicked => { root.save-topology(root.setting-peer-pos); }
+            text: "👈 Left (-1, 0)";
+            clicked => {
+                root.setting-peer-pos = "left";
+                root.save-topology-grid(root.connected-peer, -1, 0);
+            }
+        }
+        Button {
+            text: "👆 Above (0, 1)";
+            clicked => {
+                root.setting-peer-pos = "above";
+                root.save-topology-grid(root.connected-peer, 0, 1);
+            }
+        }
+        Button {
+            text: "⏩ Stack Right 2 (+2, 0)";
+            clicked => {
+                root.save-topology-grid(root.connected-peer, 2, 0);
+            }
+        }
+        Button {
+            text: "⏪ Stack Left 2 (-2, 0)";
+            clicked => {
+                root.save-topology-grid(root.connected-peer, -2, 0);
+            }
         }
     }
 

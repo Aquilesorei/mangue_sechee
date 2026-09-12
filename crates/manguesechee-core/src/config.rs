@@ -12,6 +12,7 @@ pub struct Config {
     pub device:    DeviceConfig,
     pub network:   NetworkConfig,
     pub input:     InputConfig,
+    pub hotkeys:   HotkeyConfig,
     pub clipboard: ClipboardConfig,
     pub screen:    ScreenConfig,
     pub peers:     Vec<PeerConfig>,
@@ -23,6 +24,7 @@ impl Default for Config {
             device:    DeviceConfig::default(),
             network:   NetworkConfig::default(),
             input:     InputConfig::default(),
+            hotkeys:   HotkeyConfig::default(),
             clipboard: ClipboardConfig::default(),
             screen:    ScreenConfig::default(),
             peers:     Vec::new(),
@@ -53,11 +55,12 @@ impl Default for DeviceConfig {
 pub struct NetworkConfig {
     pub discovery: bool,
     pub port:      u16,
+    pub tls:       bool,
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        Self { discovery: true, port: 24800 }
+        Self { discovery: true, port: 24800, tls: false }
     }
 }
 
@@ -83,6 +86,26 @@ impl Default for InputConfig {
             corner_deadzone_px:      50,
             cursor_locked:           false,
             edge_velocity_threshold: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HotkeyConfig {
+    pub enabled:            bool,
+    pub toggle_cursor_lock: String,
+    pub switch_screen:      String,
+    pub emergency_escape:   String,
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            enabled:            true,
+            toggle_cursor_lock: "ScrollLock".to_string(),
+            switch_screen:      "Ctrl+Alt+Tab".to_string(),
+            emergency_escape:   "Ctrl+Alt+Escape".to_string(),
         }
     }
 }
@@ -121,11 +144,91 @@ impl Default for ScreenConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeAlignment {
+    Center,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PeerConfig {
-    pub id:       String,
-    pub address:  Option<String>,  // host:port — optional if using discovery
-    pub position: String,          // "left" | "right" | "above" | "below"
+    pub id:        String,
+    pub address:   Option<String>,  // host:port — optional if using discovery
+    pub position:  String,          // "left" | "right" | "above" | "below"
+    #[serde(default)]
+    pub grid_x:    Option<i32>,
+    #[serde(default)]
+    pub grid_y:    Option<i32>,
+    #[serde(default)]
+    pub alignment: Option<String>, // "center" | "top" | "bottom"
+}
+
+impl PeerConfig {
+    pub fn new(id: impl Into<String>, address: Option<String>, position: impl Into<String>) -> Self {
+        let pos = position.into();
+        let (gx, gy) = match pos.trim().to_lowercase().as_str() {
+            "left" => (-1, 0),
+            "above" | "top" => (0, 1),
+            "below" | "bottom" => (0, -1),
+            _ => (1, 0),
+        };
+        Self {
+            id: id.into(),
+            address,
+            position: pos,
+            grid_x: Some(gx),
+            grid_y: Some(gy),
+            alignment: None,
+        }
+    }
+
+    pub fn with_coords(id: impl Into<String>, address: Option<String>, grid_x: i32, grid_y: i32) -> Self {
+        let position = match (grid_x, grid_y) {
+            (-1, 0) => "left".to_string(),
+            (1, 0) => "right".to_string(),
+            (0, 1) => "above".to_string(),
+            (0, -1) => "below".to_string(),
+            (x, _) if x > 0 => "right".to_string(),
+            (x, _) if x < 0 => "left".to_string(),
+            (_, y) if y > 0 => "above".to_string(),
+            _ => "below".to_string(),
+        };
+        Self {
+            id: id.into(),
+            address,
+            position,
+            grid_x: Some(grid_x),
+            grid_y: Some(grid_y),
+            alignment: None,
+        }
+    }
+
+    pub fn with_alignment(mut self, alignment: Option<String>) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    pub fn coordinates(&self) -> (i32, i32) {
+        if let (Some(x), Some(y)) = (self.grid_x, self.grid_y) {
+            return (x, y);
+        }
+        match self.position.trim().to_lowercase().as_str() {
+            "left" => (-1, 0),
+            "above" | "top" => (0, 1),
+            "below" | "bottom" => (0, -1),
+            _ => (1, 0),
+        }
+    }
+
+    pub fn edge_alignment(&self) -> EdgeAlignment {
+        match self.alignment.as_deref().unwrap_or("center").trim().to_lowercase().as_str() {
+            "top" | "start" => EdgeAlignment::Top,
+            "bottom" | "end" => EdgeAlignment::Bottom,
+            _ => EdgeAlignment::Center,
+        }
+    }
 }
 
 // ── Load / save ───────────────────────────────────────────────────────────────

@@ -32,6 +32,29 @@ impl Edge {
             Edge::Bottom => "below",
         }
     }
+
+    pub fn delta(&self) -> (i32, i32) {
+        match self {
+            Edge::Right => (1, 0),
+            Edge::Left => (-1, 0),
+            Edge::Top => (0, 1),
+            Edge::Bottom => (0, -1),
+        }
+    }
+
+    pub fn from_delta(dx: i32, dy: i32) -> Option<Edge> {
+        if dx > 0 {
+            Some(Edge::Right)
+        } else if dx < 0 {
+            Some(Edge::Left)
+        } else if dy > 0 {
+            Some(Edge::Top)
+        } else if dy < 0 {
+            Some(Edge::Bottom)
+        } else {
+            None
+        }
+    }
 }
 
 pub fn opposite_position(pos: &str) -> &'static str {
@@ -51,12 +74,26 @@ pub enum Message {
     Pong,
     Identity { name: String, id: String },
 
+    // ── TLS Negotiation ───────────────────────────────────────────────────────
+    /// Sent immediately on connection to negotiate TLS upgrade.
+    StartTls { requested: bool },
+    /// Responder answers whether it accepts upgrading to TLS.
+    StartTlsAck { accept: bool },
+
     // ── Phase 2/3 ─────────────────────────────────────────────────────────────
     InputEvent(InputEvent),
 
     // ── Phase 4 ──────────────────────────────────────────────────────────────
-    EdgeCrossed   { edge: Edge },
-    ReturnControl { edge: Edge },
+    EdgeCrossed   {
+        edge: Edge,
+        #[serde(default)]
+        ratio: Option<f32>,
+    },
+    ReturnControl {
+        edge: Edge,
+        #[serde(default)]
+        ratio: Option<f32>,
+    },
 
     // ── Phase 5 — pairing ─────────────────────────────────────────────────────
     /// Initiator sends its identity + a 6-digit verification code.

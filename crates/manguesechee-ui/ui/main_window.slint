@@ -53,6 +53,8 @@ export component MainWindow inherits Window {
     in-out property <bool>        setting-discovery:     true;
     in-out property <bool>        setting-clipboard:     true;
     in-out property <bool>        setting-file-transfer: true;
+    in-out property <bool>        setting-tls:           false;
+    in-out property <bool>        tls-active:            false;
     in-out property <bool>        setting-autostart:     true;
     in-out property <string>      setting-width:         "1920";
     in-out property <string>      setting-height:        "1080";
@@ -61,6 +63,9 @@ export component MainWindow inherits Window {
     in-out property <string>      setting-velocity:      "20";
     in-out property <string>      setting-peer-addr:     "";
     in-out property <string>      setting-peer-pos:      "right";
+    in-out property <string>      setting-hotkey-lock:   "ScrollLock";
+    in-out property <string>      setting-hotkey-switch: "Ctrl+Alt+Right";
+    in-out property <string>      setting-hotkey-escape: "Ctrl+Alt+Escape";
     in-out property <string>      settings-feedback:     "";
     in-out property <string>      logs-feedback:         "";
 
@@ -74,6 +79,7 @@ export component MainWindow inherits Window {
     callback disconnect-requested();
     callback toggle-discovery(bool);
     callback toggle-file-transfer(bool);
+    callback toggle-tls(bool);
     callback toggle-cursor-lock();
     callback ping-peer(string);
     callback forget-peer(string);
@@ -81,6 +87,7 @@ export component MainWindow inherits Window {
     callback save-settings();
     callback auto-detect-screen();
     callback save-topology(string);
+    callback save-topology-grid(string, int, int);
     callback filter-logs-level(int);
     callback filter-logs-text(string);
     callback copy-logs();
@@ -89,6 +96,7 @@ export component MainWindow inherits Window {
     callback start-service();
     callback stop-service();
     callback restart-service();
+    callback hide-to-tray();
     callback wizard-finish(int, string, string);
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -142,10 +150,13 @@ export component MainWindow inherits Window {
                     status: root.status;
                     is-service-running: root.is-service-running;
                     cursor-locked: root.cursor-locked;
+                    tls-active: root.tls-active;
+                    connected-peer: root.connected-peer;
                     toggle-cursor-lock => { root.toggle-cursor-lock(); }
                     start-service => { root.start-service(); }
                     stop-service => { root.stop-service(); }
                     restart-service => { root.restart-service(); }
+                    hide-to-tray => { root.hide-to-tray(); }
                 }
 
                 // TAB 0: PEERS & CONNECTIONS
@@ -159,6 +170,8 @@ export component MainWindow inherits Window {
                     topology-notice <=> root.topology-notice;
                     connection-error <=> root.connection-error;
                     is-service-running: root.is-service-running;
+                    setting-tls: root.setting-tls;
+                    tls-active: root.tls-active;
                     peers: root.peers;
                     configure-topology-clicked => { root.active-tab = 1; }
                     dismiss-error => { root.dismiss-error(); }
@@ -171,6 +184,7 @@ export component MainWindow inherits Window {
 
                 // TAB 1: SCREEN TOPOLOGY
                 if root.active-tab == 1 : TopologyView {
+                    peers: root.peers;
                     connected-peer: root.connected-peer;
                     setting-peer-pos <=> root.setting-peer-pos;
                     local-name: root.local-name;
@@ -180,6 +194,7 @@ export component MainWindow inherits Window {
                     setting-height: root.setting-height;
                     settings-feedback: root.settings-feedback;
                     save-topology(pos) => { root.save-topology(pos); }
+                    save-topology-grid(addr, gx, gy) => { root.save-topology-grid(addr, gx, gy); }
                 }
 
                 // TAB 4: FILE TRANSFERS & HISTORY
@@ -198,6 +213,7 @@ export component MainWindow inherits Window {
                     setting-discovery <=> root.setting-discovery;
                     setting-clipboard <=> root.setting-clipboard;
                     setting-file-transfer <=> root.setting-file-transfer;
+                    setting-tls <=> root.setting-tls;
                     setting-autostart <=> root.setting-autostart;
                     setting-velocity <=> root.setting-velocity;
                     setting-switch-delay <=> root.setting-switch-delay;
@@ -207,8 +223,12 @@ export component MainWindow inherits Window {
                     setting-height <=> root.setting-height;
                     setting-peer-addr <=> root.setting-peer-addr;
                     setting-peer-pos <=> root.setting-peer-pos;
+                    setting-hotkey-lock <=> root.setting-hotkey-lock;
+                    setting-hotkey-switch <=> root.setting-hotkey-switch;
+                    setting-hotkey-escape <=> root.setting-hotkey-escape;
                     settings-feedback: root.settings-feedback;
                     toggle-file-transfer(enabled) => { root.toggle-file-transfer(enabled); }
+                    toggle-tls(enabled) => { root.toggle-tls(enabled); }
                     auto-detect-screen => { root.auto-detect-screen(); }
                     save-settings => { root.save-settings(); }
                 }

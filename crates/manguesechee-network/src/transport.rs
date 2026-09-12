@@ -1,12 +1,13 @@
-//! Length-prefixed TCP transport with split send/receive halves.
+//! Length-prefixed TCP transport with optional TLS encryption and split send/receive halves.
 //!
 //! Wire format: [u32 big-endian length][bincode-encoded Message]
 
 use anyhow::Context;
 use async_trait::async_trait;
 use manguesechee_core::protocol::Message;
+use std::sync::Arc;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream,
@@ -47,8 +48,14 @@ pub trait Transport: Send {
     async fn close(self) -> anyhow::Result<()>;
 }
 
+pub enum ConnectionStream {
+    Plain(TcpStream),
+    TlsClient(tokio_rustls::client::TlsStream<TcpStream>),
+    TlsServer(tokio_rustls::server::TlsStream<TcpStream>),
+}
+
 pub struct TcpTransport {
-    stream: TcpStream,
+    stream: Option<ConnectionStream>,
 }
 
 impl TcpTransport {
@@ -104,47 +111,160 @@ impl TcpTransport {
                 }
             }
         }
-        Self { stream }
+        Self { stream: Some(ConnectionStream::Plain(stream)) }
+    }
+
+    pub fn is_tls(&self) -> bool {
+        matches!(
+            self.stream,
+            Some(ConnectionStream::TlsClient(_)) | Some(ConnectionStream::TlsServer(_))
+        )
+    }
+
+    /// Upgrade connection to TLS client
+    pub async fn upgrade_to_tls_client(
+        &mut self,
+        config: Arc<rustls::ClientConfig>,
+        domain: &str,
+    ) -> anyhow::Result<()> {
+        let s = self.stream.take().context("stream already taken")?;
+        match s {
+            ConnectionStream::Plain(tcp) => {
+                let connector = tokio_rustls::TlsConnector::from(config);
+                let server_name = rustls::pki_types::ServerName::try_from(domain.to_string())
+                    .unwrap_or_else(|_| rustls::pki_types::ServerName::try_from("manguesechee.local").unwrap());
+                let tls = connector.connect(server_name, tcp).await
+                    .context("TLS client handshake failed")?;
+                self.stream = Some(ConnectionStream::TlsClient(tls));
+                Ok(())
+            }
+            other => {
+                self.stream = Some(other);
+                anyhow::bail!("cannot upgrade: stream is already TLS");
+            }
+        }
+    }
+
+    /// Upgrade connection to TLS server
+    pub async fn upgrade_to_tls_server(
+        &mut self,
+        config: Arc<rustls::ServerConfig>,
+    ) -> anyhow::Result<()> {
+        let s = self.stream.take().context("stream already taken")?;
+        match s {
+            ConnectionStream::Plain(tcp) => {
+                let acceptor = tokio_rustls::TlsAcceptor::from(config);
+                let tls = acceptor.accept(tcp).await
+                    .context("TLS server handshake failed")?;
+                self.stream = Some(ConnectionStream::TlsServer(tls));
+                Ok(())
+            }
+            other => {
+                self.stream = Some(other);
+                anyhow::bail!("cannot upgrade: stream is already TLS");
+            }
+        }
     }
 
     /// Split into independent send and receive halves for concurrent use.
-    pub fn into_split(self) -> (TcpSender, TcpReceiver) {
-        let (read, write) = self.stream.into_split();
-        (TcpSender { write }, TcpReceiver { read })
+    pub fn into_split(mut self) -> (TcpSender, TcpReceiver) {
+        let s = self.stream.take().expect("stream must be present");
+        match s {
+            ConnectionStream::Plain(tcp) => {
+                let (r, w) = tcp.into_split();
+                (
+                    TcpSender { write: StreamWriter::Plain(w) },
+                    TcpReceiver { read: StreamReader::Plain(r) },
+                )
+            }
+            ConnectionStream::TlsClient(tls) => {
+                let (r, w) = split(tls);
+                (
+                    TcpSender { write: StreamWriter::TlsClient(w) },
+                    TcpReceiver { read: StreamReader::TlsClient(r) },
+                )
+            }
+            ConnectionStream::TlsServer(tls) => {
+                let (r, w) = split(tls);
+                (
+                    TcpSender { write: StreamWriter::TlsServer(w) },
+                    TcpReceiver { read: StreamReader::TlsServer(r) },
+                )
+            }
+        }
     }
 }
 
 #[async_trait]
 impl Transport for TcpTransport {
     async fn send(&mut self, msg: &Message) -> anyhow::Result<()> {
-        write_msg(&mut self.stream, msg).await
+        let s = self.stream.as_mut().context("stream closed")?;
+        match s {
+            ConnectionStream::Plain(tcp) => write_msg(tcp, msg).await,
+            ConnectionStream::TlsClient(tls) => write_msg(tls, msg).await,
+            ConnectionStream::TlsServer(tls) => write_msg(tls, msg).await,
+        }
     }
+
     async fn receive(&mut self) -> anyhow::Result<Message> {
-        read_msg(&mut self.stream).await
+        let s = self.stream.as_mut().context("stream closed")?;
+        match s {
+            ConnectionStream::Plain(tcp) => read_msg(tcp).await,
+            ConnectionStream::TlsClient(tls) => read_msg(tls).await,
+            ConnectionStream::TlsServer(tls) => read_msg(tls).await,
+        }
     }
+
     async fn close(mut self) -> anyhow::Result<()> {
-        self.stream.shutdown().await.context("tcp shutdown")
+        if let Some(mut s) = self.stream.take() {
+            match &mut s {
+                ConnectionStream::Plain(tcp) => tcp.shutdown().await.context("tcp shutdown")?,
+                ConnectionStream::TlsClient(tls) => tls.shutdown().await.context("tls shutdown")?,
+                ConnectionStream::TlsServer(tls) => tls.shutdown().await.context("tls shutdown")?,
+            }
+        }
+        Ok(())
     }
 }
 
 // ── Split halves ──────────────────────────────────────────────────────────────
 
+pub enum StreamWriter {
+    Plain(OwnedWriteHalf),
+    TlsClient(WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>),
+    TlsServer(WriteHalf<tokio_rustls::server::TlsStream<TcpStream>>),
+}
+
+pub enum StreamReader {
+    Plain(OwnedReadHalf),
+    TlsClient(ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>),
+    TlsServer(ReadHalf<tokio_rustls::server::TlsStream<TcpStream>>),
+}
+
 pub struct TcpSender {
-    write: OwnedWriteHalf,
+    write: StreamWriter,
 }
 
 impl TcpSender {
     pub async fn send(&mut self, msg: &Message) -> anyhow::Result<()> {
-        write_msg(&mut self.write, msg).await
+        match &mut self.write {
+            StreamWriter::Plain(w) => write_msg(w, msg).await,
+            StreamWriter::TlsClient(w) => write_msg(w, msg).await,
+            StreamWriter::TlsServer(w) => write_msg(w, msg).await,
+        }
     }
 }
 
 pub struct TcpReceiver {
-    read: OwnedReadHalf,
+    read: StreamReader,
 }
 
 impl TcpReceiver {
     pub async fn receive(&mut self) -> anyhow::Result<Message> {
-        read_msg(&mut self.read).await
+        match &mut self.read {
+            StreamReader::Plain(r) => read_msg(r).await,
+            StreamReader::TlsClient(r) => read_msg(r).await,
+            StreamReader::TlsServer(r) => read_msg(r).await,
+        }
     }
 }

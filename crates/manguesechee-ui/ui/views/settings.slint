@@ -7,11 +7,15 @@ export component SettingsView inherits ScrollView {
     in-out property <bool> setting-discovery: true;
     in-out property <bool> setting-clipboard: true;
     in-out property <bool> setting-file-transfer: true;
+    in-out property <bool> setting-tls: false;
     in-out property <bool> setting-autostart: true;
     in-out property <string> setting-velocity: "20";
     in-out property <string> setting-switch-delay: "0";
     in-out property <string> setting-deadzone: "50";
     in-out property <bool> cursor-locked: false;
+    in-out property <string> setting-hotkey-lock: "ScrollLock";
+    in-out property <string> setting-hotkey-switch: "Ctrl+Alt+Right";
+    in-out property <string> setting-hotkey-escape: "Ctrl+Alt+Escape";
     in-out property <string> setting-width: "1920";
     in-out property <string> setting-height: "1080";
     in-out property <string> setting-peer-addr: "";
@@ -19,6 +23,7 @@ export component SettingsView inherits ScrollView {
     in property <string> settings-feedback: "";
 
     callback toggle-file-transfer(bool);
+    callback toggle-tls(bool);
     callback auto-detect-screen();
     callback save-settings();
 
@@ -79,6 +84,30 @@ export component SettingsView inherits ScrollView {
                 }
                 HorizontalBox {
                     spacing: 10px;
+                    Text { text: "TLS Encryption:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Switch {
+                        text: root.setting-tls ? "Enabled (Encrypted)" : "Disabled (Unencrypted)";
+                        checked <=> root.setting-tls;
+                        toggled => { root.toggle-tls(self.checked); }
+                    }
+                }
+                if !root.setting-tls : Rectangle {
+                    background: #251d10; border-radius: 6px; border-width: 1px; border-color: #d97706;
+                    HorizontalBox {
+                        padding: 10px; spacing: 10px;
+                        Text { text: "💡"; font-size: 16px; vertical-alignment: center; }
+                        VerticalBox {
+                            spacing: 2px;
+                            Text { text: "Security Recommendation"; font-size: 12px; font-weight: 700; color: #fbbf24; }
+                            Text {
+                                text: "We recommend enabling TLS Encryption to prevent keystrokes, passwords, and clipboard data from being sniffed by other devices on your local Wi-Fi / LAN.";
+                                font-size: 11px; color: #fde68a; wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+                HorizontalBox {
+                    spacing: 10px;
                     Text { text: "Autostart on Login:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.setting-autostart ? "Enabled (systemd)" : "Disabled"; checked <=> root.setting-autostart; }
                 }
@@ -111,6 +140,76 @@ export component SettingsView inherits ScrollView {
                     spacing: 10px;
                     Text { text: "Lock Cursor:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.cursor-locked ? "Locked to screen" : "Unlocked"; checked <=> root.cursor-locked; }
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Global Hotkeys & Emergency Breakout";
+            VerticalBox {
+                spacing: 10px;
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Toggle Cursor Lock:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["ScrollLock (Recommended)", "Pause / Break", "Ctrl+Alt+L", "Disabled"];
+                        current-index: root.setting-hotkey-lock == "Pause / Break" || root.setting-hotkey-lock == "Pause" ? 1
+                            : (root.setting-hotkey-lock == "Ctrl+Alt+L" ? 2
+                            : (root.setting-hotkey-lock == "Disabled" || root.setting-hotkey-lock == "None" ? 3 : 0));
+                        selected => {
+                            root.setting-hotkey-lock = self.current-index == 1 ? "Pause"
+                                : (self.current-index == 2 ? "Ctrl+Alt+L"
+                                : (self.current-index == 3 ? "Disabled" : "ScrollLock"));
+                        }
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Switch Screen (Jump):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["Ctrl+Alt+Right (Recommended)", "Ctrl+Alt+Left", "Pause / Break", "F12", "Disabled"];
+                        current-index: root.setting-hotkey-switch == "Ctrl+Alt+Left" ? 1
+                            : (root.setting-hotkey-switch == "Pause / Break" || root.setting-hotkey-switch == "Pause" ? 2
+                            : (root.setting-hotkey-switch == "F12" ? 3
+                            : (root.setting-hotkey-switch == "Disabled" || root.setting-hotkey-switch == "None" ? 4 : 0)));
+                        selected => {
+                            root.setting-hotkey-switch = self.current-index == 1 ? "Ctrl+Alt+Left"
+                                : (self.current-index == 2 ? "Pause"
+                                : (self.current-index == 3 ? "F12"
+                                : (self.current-index == 4 ? "Disabled" : "Ctrl+Alt+Right")));
+                        }
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Emergency Breakout:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["Ctrl+Alt+Escape (Always active)", "Pause / Break", "ScrollLock"];
+                        current-index: root.setting-hotkey-escape == "Pause" || root.setting-hotkey-escape == "Pause / Break" ? 1
+                            : (root.setting-hotkey-escape == "ScrollLock" ? 2 : 0);
+                        selected => {
+                            root.setting-hotkey-escape = self.current-index == 1 ? "Pause"
+                                : (self.current-index == 2 ? "ScrollLock" : "Ctrl+Alt+Escape");
+                        }
+                        horizontal-stretch: 1;
+                    }
+                }
+                Rectangle {
+                    background: #1a2238; border-radius: 6px; border-width: 1px; border-color: #3b82f6;
+                    HorizontalBox {
+                        padding: 10px; spacing: 10px;
+                        Text { text: "⌨️"; font-size: 16px; vertical-alignment: center; }
+                        VerticalBox {
+                            spacing: 2px;
+                            Text { text: "Hardware Hotkey Control"; font-size: 12px; font-weight: 700; color: #93c5fd; }
+                            Text {
+                                text: "Hotkeys operate at the evdev driver level. Use 'Switch Screen' to jump even if a game or full-screen app traps the cursor, and 'Emergency Breakout' to instantly ungrab and restore local control.";
+                                font-size: 11px; color: #bfdbfe; wrap: word-wrap;
+                            }
+                        }
+                    }
                 }
             }
         }

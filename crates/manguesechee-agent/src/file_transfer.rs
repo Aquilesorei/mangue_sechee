@@ -415,6 +415,14 @@ pub fn spawn_background_sender(
         let mut stream_ok = false;
         match manguesechee_network::connect(&peer_addr).await {
             Ok(mut transport) => {
+                let local_tls = ipc_state.lock().unwrap().tls_enabled;
+                let _ = transport.send(&Message::StartTls { requested: local_tls }).await;
+                if let Ok(Message::StartTlsAck { accept: true }) = transport.receive().await {
+                    if let Ok(client_config) = manguesechee_network::tls::create_client_config() {
+                        let host = peer_addr.split(':').next().unwrap_or("manguesechee.local");
+                        let _ = transport.upgrade_to_tls_client(client_config, host).await;
+                    }
+                }
                 match run_background_stream(
                     &mut transport,
                     transfer_id.clone(),

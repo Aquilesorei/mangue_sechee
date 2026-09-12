@@ -41,13 +41,13 @@ pub async fn run(name: String, id: String, port: u16, state: SharedState) {
                                 }).map(|p| p.position.clone())
                             }).unwrap_or_else(|| "right".to_string());
 
-                            s.peers.push(PeerInfo {
-                                name: peer.name.clone(),
-                                address: peer.address.clone(),
-                                paired: is_paired,
-                                connected: false,
-                                position: pos,
-                            });
+                            s.peers.push(PeerInfo::new(
+                                peer.name.clone(),
+                                peer.address.clone(),
+                                is_paired,
+                                false,
+                                pos,
+                            ));
                         }
                     }
                 }

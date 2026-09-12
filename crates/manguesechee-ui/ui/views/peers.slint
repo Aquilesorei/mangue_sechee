@@ -11,6 +11,8 @@ export component PeersView inherits VerticalBox {
     in-out property <string> topology-notice: "";
     in-out property <string> connection-error: "";
     in property <bool> is-service-running: true;
+    in property <bool> setting-tls: false;
+    in property <bool> tls-active: false;
     in property <[PeerEntry]> peers: [];
 
     callback configure-topology-clicked();
@@ -46,6 +48,12 @@ export component PeersView inherits VerticalBox {
                 Text { text: "Auto-Discovery:"; font-size: 11px; color: #72748a; }
                 Text { text: root.discovery ? "mDNS Active" : "Disabled"; font-size: 13px; font-weight: 600; color: root.discovery ? #38ef7d : #f59e0b; }
             }
+            Rectangle { width: 1px; background: #2b2d42; }
+            VerticalBox {
+                spacing: 2px;
+                Text { text: "Security (TLS):"; font-size: 11px; color: #72748a; }
+                Text { text: root.setting-tls ? "🔒 TLS Active" : "🔓 Disabled"; font-size: 13px; font-weight: 600; color: root.setting-tls ? #38ef7d : #f59e0b; }
+            }
             Rectangle { horizontal-stretch: 1; }
         }
     }
@@ -61,12 +69,29 @@ export component PeersView inherits VerticalBox {
             }
             VerticalBox {
                 spacing: 2px; horizontal-stretch: 1;
-                Text {
-                    text: "✓ Connected to " + root.connected-peer;
-                    font-size: 14px; font-weight: 700; color: #4ade80;
+                HorizontalBox {
+                    spacing: 8px;
+                    Text {
+                        text: "✓ Connected to " + root.connected-peer;
+                        font-size: 14px; font-weight: 700; color: #4ade80;
+                    }
+                    Rectangle {
+                        background: root.tls-active ? #14532d : #78350f;
+                        border-radius: 4px; height: 18px;
+                        HorizontalBox {
+                            padding-left: 6px; padding-right: 6px;
+                            Text {
+                                text: root.tls-active ? "🔒 TLS Encrypted" : "⚠️ Unencrypted";
+                                font-size: 10px; font-weight: 700;
+                                color: root.tls-active ? #86efac : #fde047;
+                            }
+                        }
+                    }
                 }
                 Text {
-                    text: "Seamless control is active! Click below to arrange your screen layout.";
+                    text: root.tls-active
+                        ? "Seamless control is active and traffic is encrypted with TLS! Click below to arrange your screen layout."
+                        : "Seamless control is active! Traffic is unencrypted (enable TLS in Settings to secure traffic).";
                     font-size: 12px; color: #a7f3d0;
                 }
             }

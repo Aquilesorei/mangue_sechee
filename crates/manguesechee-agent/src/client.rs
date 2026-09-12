@@ -3,7 +3,10 @@
 
 use manguesechee_core::events::InputEvent;
 use manguesechee_core::protocol::{Edge, Message};
-use manguesechee_input::{find_all_keyboards, find_all_mice, KeyboardCapture, MouseCapture};
+use manguesechee_core::topology::GridTopology;
+use manguesechee_input::{
+    find_all_keyboards, find_all_mice, HotkeyAction, HotkeyMatcher, KeyboardCapture, MouseCapture,
+};
 use manguesechee_network::{connect, Transport};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -14,13 +17,14 @@ use crate::edge::EdgeDetector;
 use crate::session::{generate_code, load_known_peers, save_known_peers, show_outgoing_code};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, PartialEq)]
 enum ControllerState { Local, Forwarding }
 
 #[derive(Debug)]
 enum InboundSignal {
-    ReturnControl,
+    ReturnControl(Edge, Option<f32>),
     Pong,
     Disconnected(String),
 }
@@ -41,6 +45,7 @@ impl Drop for PeerConnectedGuard {
         if s.connected_to.as_deref() == Some(&self.addr) {
             s.connected_to = None;
             s.topology_configured = false;
+            s.tls_active = false;
         }
     }
 }
@@ -61,6 +66,34 @@ pub async fn connect_to(
 ) -> anyhow::Result<()> {
     info!("connecting to {addr}  (screen {screen_width}×{screen_height})");
     let mut transport = connect(addr).await?;
+
+    // ── TLS Upgrade Negotiation ────────────────────────────────────────────────
+    let local_tls_enabled = ipc_state.lock().unwrap().tls_enabled;
+    let _ = transport.send(&Message::StartTls { requested: local_tls_enabled }).await;
+    let tls_active = match transport.receive().await {
+        Ok(Message::StartTlsAck { accept: true }) => {
+            info!("TLS accepted by peer; upgrading connection to TLS");
+            let client_config = manguesechee_network::tls::create_client_config()?;
+            let host = addr.split(':').next().unwrap_or("manguesechee.local");
+            transport.upgrade_to_tls_client(client_config, host).await?;
+            info!("🔒 TLS encryption established with {addr}");
+            true
+        }
+        Ok(Message::StartTlsAck { accept: false }) => {
+            if local_tls_enabled {
+                warn!("peer at {addr} does not have TLS enabled; connection is unencrypted (enable TLS on peer to secure traffic)");
+            } else {
+                info!("TLS is disabled locally; connection is unencrypted");
+            }
+            false
+        }
+        Ok(other) => {
+            warn!("peer sent unexpected response to StartTls ({other:?}); continuing unencrypted");
+            false
+        }
+        Err(e) => anyhow::bail!("connection error during TLS negotiation: {e}"),
+    };
+    ipc_state.lock().unwrap().tls_active = tls_active;
 
     // ── Identity ──────────────────────────────────────────────────────────────
     transport.send(&Message::Identity { name: local_name.clone(), id: local_id.clone() }).await?;
@@ -104,10 +137,15 @@ pub async fn connect_to(
             }
             p.position.clone()
         } else {
-            let pos = manguesechee_core::config::load().ok().and_then(|cfg| {
+            let (pos, gx, gy) = manguesechee_core::config::load().ok().and_then(|cfg| {
                 cfg.peers.iter().find(|p| p.address.as_deref().unwrap_or("").contains(addr) || p.address.as_deref().is_some_and(|a| !a.is_empty() && addr.contains(a)) || p.id == peer_id)
-                    .map(|p| p.position.clone())
-            }).unwrap_or_else(|| "right".to_string());
+                    .map(|p| {
+                        let (x, y) = p.coordinates();
+                        (p.position.clone(), x, y)
+                    })
+            }).unwrap_or_else(|| {
+                ("right".to_string(), 1, 0)
+            });
 
             s.peers.push(manguesechee_core::ipc::PeerInfo {
                 name: peer_name.clone(),
@@ -115,6 +153,8 @@ pub async fn connect_to(
                 paired: true,
                 connected: true,
                 position: pos.clone(),
+                grid_x: gx,
+                grid_y: gy,
             });
             pos
         }
@@ -126,11 +166,11 @@ pub async fn connect_to(
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
         if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(addr) || p.address.as_deref().is_some_and(|a| !a.is_empty() && addr.contains(a))) {
-            cfg.peers.push(manguesechee_core::config::PeerConfig {
-                id: peer_id.clone(),
-                address: Some(addr.to_string()),
-                position: existing_pos,
-            });
+            cfg.peers.push(manguesechee_core::config::PeerConfig::new(
+                peer_id.clone(),
+                Some(addr.to_string()),
+                existing_pos,
+            ));
             let _ = manguesechee_core::config::save(&cfg);
         }
     }
@@ -281,9 +321,9 @@ pub async fn connect_to(
                     info!("← peer updated FileTransferStatus: enabled={enabled}");
                     peer_files_recv.store(enabled, std::sync::atomic::Ordering::SeqCst);
                 }
-                Ok(Message::ReturnControl { edge }) => {
-                    info!("← ReturnControl ({edge:?})");
-                    let _ = inbound_tx_task.send(InboundSignal::ReturnControl).await;
+                Ok(Message::ReturnControl { edge, ratio }) => {
+                    info!("← ReturnControl ({edge:?}, ratio={ratio:?})");
+                    let _ = inbound_tx_task.send(InboundSignal::ReturnControl(edge, ratio)).await;
                 }
                 Ok(Message::FileTransferOffer { transfer_id, files, total_size, is_background }) => {
                     if state_for_recv.lock().unwrap().file_transfer_enabled {
@@ -360,23 +400,84 @@ pub async fn connect_to(
         let _ = inbound_tx_task.send(InboundSignal::Disconnected("receiver task finished".into())).await;
     });
 
+    // ── Target edge & clipboard sync helpers ──────────────────────────────────
+    fn resolve_target_edge(ipc_state: &Arc<std::sync::Mutex<crate::ipc_server::AgentState>>, addr: &str) -> Edge {
+        let s = ipc_state.lock().unwrap();
+        let single_peer = s.peers.len() == 1;
+        s.peers.iter()
+            .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
+            .map(|p| match p.position.to_lowercase().as_str() {
+                "left" => Edge::Left,
+                "above" | "top" => Edge::Top,
+                "below" | "bottom" => Edge::Bottom,
+                _ => Edge::Right,
+            })
+            .unwrap_or(Edge::Right)
+    }
+
+    async fn sync_clipboard_on_entry(
+        sender: &mut manguesechee_network::transport::TcpSender,
+        ipc_state: &Arc<std::sync::Mutex<crate::ipc_server::AgentState>>,
+        peer_files_enabled: &Arc<std::sync::atomic::AtomicBool>,
+        addr: &str,
+    ) {
+        if let Some(text) = clipboard::get_text() {
+            if !text.is_empty() && !clipboard::is_already_synced(&text) {
+                clipboard::mark_synced(&text);
+                let local_allowed = ipc_state.lock().unwrap().file_transfer_enabled;
+                let peer_allowed = peer_files_enabled.load(std::sync::atomic::Ordering::SeqCst);
+                let files_allowed = local_allowed && peer_allowed;
+                if !peer_allowed && crate::file_clipboard::parse_clipboard_file_uris(&text).is_some() {
+                    info!("→ skipping file transfer on screen entry: peer has file transfer disabled");
+                }
+                if files_allowed {
+                    if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
+                        let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
+                        let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
+                        let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
+                        let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
+
+                        if total_size <= fast_limit {
+                            let tid = uuid::Uuid::new_v4().to_string();
+                            if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, sender, ipc_state).await {
+                                warn!("failed to send fast file transfer on screen entry: {e}");
+                            }
+                        } else if total_size <= bg_limit {
+                            crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(ipc_state));
+                        }
+                    } else {
+                        info!("→ syncing clipboard on screen entry ({} bytes)", text.len());
+                        let _ = sender.send(&Message::ClipboardSync { text }).await;
+                    }
+                } else if crate::file_clipboard::parse_clipboard_file_uris(&text).is_none() {
+                    info!("→ syncing clipboard on screen entry ({} bytes)", text.len());
+                    let _ = sender.send(&Message::ClipboardSync { text }).await;
+                }
+            }
+        }
+    }
+
     // ── State machine ─────────────────────────────────────────────────────────
     struct GrabGuard {
         grab_mouse_tx: tokio::sync::watch::Sender<bool>,
         grab_keyboard_tx: tokio::sync::watch::Sender<bool>,
+        ipc_state: Arc<std::sync::Mutex<crate::ipc_server::AgentState>>,
     }
     impl Drop for GrabGuard {
         fn drop(&mut self) {
             let _ = self.grab_mouse_tx.send(false);
             let _ = self.grab_keyboard_tx.send(false);
+            self.ipc_state.lock().unwrap().is_forwarding = false;
         }
     }
     let _grab_guard = GrabGuard {
         grab_mouse_tx: grab_mouse_tx.clone(),
         grab_keyboard_tx: grab_keyboard_tx.clone(),
+        ipc_state: Arc::clone(&ipc_state),
     };
 
     let mut state = ControllerState::Local;
+    let mut active_coord: (i32, i32) = (0, 0);
     let initial_locked = ipc_state.lock().unwrap().cursor_locked;
     let mut edge = EdgeDetector::new(screen_width, screen_height)
         .with_settings(deadzone_px, delay_ms, initial_locked, velocity_threshold);
@@ -385,12 +486,17 @@ pub async fn connect_to(
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
     ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    let mut lctrl_held = false;
-    let mut rctrl_held = false;
-    let mut lalt_held = false;
-    let mut ralt_held = false;
+    let hotkey_cfg = manguesechee_core::config::load()
+        .map(|c| c.hotkeys)
+        .unwrap_or_default();
+    let mut hotkey_matcher = HotkeyMatcher::from_config(&hotkey_cfg);
 
-    info!("ready — move cursor to screen edge to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms, velocity_thresh={velocity_threshold}px)");
+    let get_grid = |ipc_state: &Arc<std::sync::Mutex<crate::ipc_server::AgentState>>| -> GridTopology {
+        let s = ipc_state.lock().unwrap();
+        GridTopology::from_peer_infos(&s.peers)
+    };
+
+    info!("ready — move cursor to screen edge or use hotkeys to switch to peer (locked={initial_locked}, deadzone={deadzone_px}px, delay={delay_ms}ms, velocity_thresh={velocity_threshold}px)");
 
     loop {
         // Sync dynamic cursor lock from GUI / IPC
@@ -404,42 +510,180 @@ pub async fn connect_to(
                     warn!("local input event stream ended — ungrabbing");
                     let _ = grab_mouse_tx.send(false);
                     let _ = grab_keyboard_tx.send(false);
+                    ipc_state.lock().unwrap().is_forwarding = false;
                     break;
                 };
 
-                // Track modifier keys and emergency escape hotkey
+                // Hotkey and breakout handling
                 if let InputEvent::Key { key, pressed } = &event {
-                    match key.0 {
-                        29 => lctrl_held = *pressed,
-                        97 => rctrl_held = *pressed,
-                        56 => lalt_held = *pressed,
-                        100 => ralt_held = *pressed,
-                        _ => {}
-                    }
-                    if *pressed && state == ControllerState::Forwarding {
-                        let ctrl_alt_esc = (lctrl_held || rctrl_held) && (lalt_held || ralt_held) && key.0 == 1;
-                        let pause_or_scroll = key.0 == 119 || key.0 == 70;
-                        if ctrl_alt_esc || pause_or_scroll {
-                            info!("🚨 Emergency local escape hotkey triggered (key code {}) — ungrabbing immediately", key.0);
-                            let _ = grab_mouse_tx.send(false);
-                            let _ = grab_keyboard_tx.send(false);
-                            state = ControllerState::Local;
-                            let target_edge = {
-                                let s = ipc_state.lock().unwrap();
-                                let single_peer = s.peers.len() == 1;
-                                s.peers.iter()
-                                    .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
-                                    .map(|p| match p.position.to_lowercase().as_str() {
-                                        "left" => Edge::Left,
-                                        "above" | "top" => Edge::Top,
-                                        "below" | "bottom" => Edge::Bottom,
-                                        _ => Edge::Right,
-                                    })
-                                    .unwrap_or(Edge::Right)
-                            };
-                            edge.set_allowed_edge(Some(target_edge));
-                            edge.place_at_entry(&target_edge);
-                            continue;
+                    if let Some(action) = hotkey_matcher.process_key(*key, *pressed) {
+                        match action {
+                            HotkeyAction::ToggleCursorLock => {
+                                let new_locked = {
+                                    let mut s = ipc_state.lock().unwrap();
+                                    s.cursor_locked = !s.cursor_locked;
+                                    s.cursor_locked
+                                };
+                                edge.set_locked(new_locked);
+                                if let Ok(mut cfg) = manguesechee_core::config::load() {
+                                    cfg.input.cursor_locked = new_locked;
+                                    let _ = manguesechee_core::config::save(&cfg);
+                                }
+                                info!("🔒 Hotkey toggled cursor lock: {}", if new_locked { "LOCKED" } else { "UNLOCKED" });
+                                continue;
+                            }
+
+                            HotkeyAction::DirectionalJump(jump_edge) => {
+                                let grid = get_grid(&ipc_state);
+                                let (dx, dy) = jump_edge.delta();
+                                let next_coord = (active_coord.0 + dx, active_coord.1 + dy);
+                                info!("⌨️ Directional Jump {jump_edge:?} requested from {active_coord:?} -> {next_coord:?}");
+
+                                if next_coord == (0, 0) {
+                                    // Stepping back into Local screen
+                                    if state == ControllerState::Forwarding {
+                                        info!("⌨️ Directional Jump {jump_edge:?}: returning to Local screen (0, 0)");
+                                        let _ = sender.send(&Message::ReturnControl { edge: jump_edge, ratio: None }).await;
+                                        let _ = grab_mouse_tx.send(false);
+                                        let _ = grab_keyboard_tx.send(false);
+                                        state = ControllerState::Local;
+                                        active_coord = (0, 0);
+                                        ipc_state.lock().unwrap().is_forwarding = false;
+                                        hotkey_matcher.reset_modifiers();
+                                        edge.place_at_center();
+                                        edge.arm_cooldown(Duration::from_millis(300));
+                                    }
+                                } else if let Some(target_node) = grid.find_at(next_coord.0, next_coord.1) {
+                                    info!("⌨️ Directional Jump {jump_edge:?}: target screen '{}' at {next_coord:?}", target_node.name);
+                                    match state {
+                                        ControllerState::Local => {
+                                            let _ = grab_mouse_tx.send(true);
+                                            let _ = grab_keyboard_tx.send(true);
+                                            if let Err(e) = sender.send(&Message::EdgeCrossed { edge: jump_edge, ratio: None }).await {
+                                                warn!("failed to send EdgeCrossed on directional jump: {e}");
+                                                let _ = grab_mouse_tx.send(false);
+                                                let _ = grab_keyboard_tx.send(false);
+                                                ipc_state.lock().unwrap().is_forwarding = false;
+                                                break;
+                                            }
+                                            state = ControllerState::Forwarding;
+                                            active_coord = next_coord;
+                                            ipc_state.lock().unwrap().is_forwarding = true;
+                                            hotkey_matcher.reset_modifiers();
+                                            edge.place_at_center();
+                                            edge.arm_cooldown(Duration::from_millis(300));
+                                            if clipboard_enabled {
+                                                sync_clipboard_on_entry(&mut sender, &ipc_state, &peer_files_enabled, addr).await;
+                                            }
+                                        }
+                                        ControllerState::Forwarding => {
+                                            active_coord = next_coord;
+                                            hotkey_matcher.reset_modifiers();
+                                            let _ = sender.send(&Message::EdgeCrossed { edge: jump_edge, ratio: None }).await;
+                                        }
+                                    }
+                                } else {
+                                    // Fallback for single-peer configurations or default positions
+                                    let target_edge = resolve_target_edge(&ipc_state, addr);
+                                    match state {
+                                        ControllerState::Local if jump_edge == target_edge => {
+                                            info!("⌨️ Directional Jump {jump_edge:?}: jumping to peer ({addr})");
+                                            let _ = grab_mouse_tx.send(true);
+                                            let _ = grab_keyboard_tx.send(true);
+                                            if let Err(e) = sender.send(&Message::EdgeCrossed { edge: target_edge, ratio: None }).await {
+                                                warn!("failed to send EdgeCrossed: {e}");
+                                                let _ = grab_mouse_tx.send(false);
+                                                let _ = grab_keyboard_tx.send(false);
+                                                ipc_state.lock().unwrap().is_forwarding = false;
+                                                break;
+                                            }
+                                            state = ControllerState::Forwarding;
+                                            active_coord = target_edge.delta();
+                                            ipc_state.lock().unwrap().is_forwarding = true;
+                                            hotkey_matcher.reset_modifiers();
+                                            edge.place_at_center();
+                                            edge.arm_cooldown(Duration::from_millis(300));
+                                            if clipboard_enabled {
+                                                sync_clipboard_on_entry(&mut sender, &ipc_state, &peer_files_enabled, addr).await;
+                                            }
+                                        }
+                                        ControllerState::Forwarding if jump_edge == target_edge.opposite() => {
+                                            info!("⌨️ Directional Jump {jump_edge:?}: returning to Local screen (0, 0)");
+                                            let _ = sender.send(&Message::ReturnControl { edge: target_edge, ratio: None }).await;
+                                            let _ = grab_mouse_tx.send(false);
+                                            let _ = grab_keyboard_tx.send(false);
+                                            state = ControllerState::Local;
+                                            active_coord = (0, 0);
+                                            ipc_state.lock().unwrap().is_forwarding = false;
+                                            hotkey_matcher.reset_modifiers();
+                                            edge.place_at_center();
+                                            edge.arm_cooldown(Duration::from_millis(300));
+                                        }
+                                        _ => {
+                                            info!("⌨️ Directional Jump {jump_edge:?}: hit grid boundary at {active_coord:?} (no adjacent screen)");
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+
+                            HotkeyAction::SwitchScreen => {
+                                let target_edge = resolve_target_edge(&ipc_state, addr);
+                                match state {
+                                    ControllerState::Local => {
+                                        info!("⌨️ Hotkey switch: jumping to peer screen ({addr})");
+                                        let _ = grab_mouse_tx.send(true);
+                                        let _ = grab_keyboard_tx.send(true);
+                                        if let Err(e) = sender.send(&Message::EdgeCrossed { edge: target_edge, ratio: None }).await {
+                                            warn!("failed to send EdgeCrossed on hotkey switch: {e}");
+                                            let _ = grab_mouse_tx.send(false);
+                                            let _ = grab_keyboard_tx.send(false);
+                                            ipc_state.lock().unwrap().is_forwarding = false;
+                                            break;
+                                        }
+                                        state = ControllerState::Forwarding;
+                                        active_coord = target_edge.delta();
+                                        ipc_state.lock().unwrap().is_forwarding = true;
+                                        hotkey_matcher.reset_modifiers();
+                                        edge.place_at_center();
+                                        edge.arm_cooldown(Duration::from_millis(300));
+
+                                        if clipboard_enabled {
+                                            sync_clipboard_on_entry(&mut sender, &ipc_state, &peer_files_enabled, addr).await;
+                                        }
+                                    }
+                                    ControllerState::Forwarding => {
+                                        info!("⌨️ Hotkey switch: returning to local screen");
+                                        let _ = sender.send(&Message::ReturnControl { edge: target_edge, ratio: None }).await;
+                                        let _ = grab_mouse_tx.send(false);
+                                        let _ = grab_keyboard_tx.send(false);
+                                        state = ControllerState::Local;
+                                        active_coord = (0, 0);
+                                        ipc_state.lock().unwrap().is_forwarding = false;
+                                        hotkey_matcher.reset_modifiers();
+                                        edge.place_at_center();
+                                        edge.arm_cooldown(Duration::from_millis(300));
+                                    }
+                                }
+                                continue;
+                            }
+
+                            HotkeyAction::EmergencyEscape => {
+                                if state == ControllerState::Forwarding {
+                                    let target_edge = resolve_target_edge(&ipc_state, addr);
+                                    info!("🚨 Emergency escape hotkey triggered (key code {}) — ungrabbing immediately", key.0);
+                                    let _ = sender.send(&Message::ReturnControl { edge: target_edge, ratio: None }).await;
+                                    let _ = grab_mouse_tx.send(false);
+                                    let _ = grab_keyboard_tx.send(false);
+                                    state = ControllerState::Local;
+                                    active_coord = (0, 0);
+                                    ipc_state.lock().unwrap().is_forwarding = false;
+                                    hotkey_matcher.reset_modifiers();
+                                    edge.place_at_center();
+                                    edge.arm_cooldown(Duration::from_millis(300));
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -447,72 +691,40 @@ pub async fn connect_to(
                 match state {
                     ControllerState::Local => {
                         if let InputEvent::MouseMove { dx, dy } = &event {
-                            // Dynamic peer target edge resolution
-                            let target_edge = {
-                                let s = ipc_state.lock().unwrap();
-                                let single_peer = s.peers.len() == 1;
-                                s.peers.iter()
-                                    .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
-                                    .map(|p| match p.position.to_lowercase().as_str() {
-                                        "left" => Edge::Left,
-                                        "above" | "top" => Edge::Top,
-                                        "below" | "bottom" => Edge::Bottom,
-                                        _ => Edge::Right,
-                                    })
-                                    .unwrap_or(Edge::Right)
-                            };
-                            edge.set_allowed_edge(Some(target_edge));
+                            let grid = get_grid(&ipc_state);
+                            let target_edge = resolve_target_edge(&ipc_state, addr);
+                            edge.set_allowed_edge(None);
 
                             if let Some(crossed) = edge.update(*dx, *dy) {
-                                if crossed == target_edge {
-                                    info!("→ EdgeCrossed ({crossed:?}) matching target {target_edge:?} — grabbing");
+                                let (cdx, cdy) = crossed.delta();
+                                let neighbor_coord = (active_coord.0 + cdx, active_coord.1 + cdy);
+                                let is_valid = grid.find_at(neighbor_coord.0, neighbor_coord.1).is_some()
+                                    || crossed == target_edge;
+
+                                if is_valid {
+                                    let ratio = edge.current_ratio(crossed);
+                                    info!("→ EdgeCrossed ({crossed:?}, ratio={ratio:.2}) to {neighbor_coord:?} — grabbing");
                                     let _ = grab_mouse_tx.send(true);
                                     let _ = grab_keyboard_tx.send(true);
-                                    if let Err(e) = sender.send(&Message::EdgeCrossed { edge: crossed }).await {
+                                    if let Err(e) = sender.send(&Message::EdgeCrossed { edge: crossed, ratio: Some(ratio) }).await {
                                         warn!("failed to send EdgeCrossed to {addr}: {e} — ungrabbing");
                                         let _ = grab_mouse_tx.send(false);
                                         let _ = grab_keyboard_tx.send(false);
+                                        ipc_state.lock().unwrap().is_forwarding = false;
                                         break;
                                     }
                                     state = ControllerState::Forwarding;
+                                    active_coord = neighbor_coord;
+                                    ipc_state.lock().unwrap().is_forwarding = true;
+                                    hotkey_matcher.reset_modifiers();
 
                                     // Immediate clipboard sync on entering peer screen
                                     if clipboard_enabled {
-                                        if let Some(text) = clipboard::get_text() {
-                                            if !text.is_empty() && !clipboard::is_already_synced(&text) {
-                                                clipboard::mark_synced(&text);
-                                                let local_allowed = ipc_state.lock().unwrap().file_transfer_enabled;
-                                                let peer_allowed = peer_files_enabled.load(std::sync::atomic::Ordering::SeqCst);
-                                                let files_allowed = local_allowed && peer_allowed;
-                                                if !peer_allowed && crate::file_clipboard::parse_clipboard_file_uris(&text).is_some() {
-                                                    info!("→ skipping file transfer on EdgeCrossed: peer has file transfer disabled");
-                                                }
-                                                if files_allowed {
-                                                    if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
-                                                        let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
-                                                        let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
-                                                        let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
-                                                        let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
-
-                                                        if total_size <= fast_limit {
-                                                            let tid = uuid::Uuid::new_v4().to_string();
-                                                            if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, &mut sender, &ipc_state).await {
-                                                                warn!("failed to send fast file transfer on EdgeCrossed: {e}");
-                                                            }
-                                                        } else if total_size <= bg_limit {
-                                                            crate::file_transfer::spawn_background_sender(addr.to_string(), files, disk_paths, total_size, Arc::clone(&ipc_state));
-                                                        }
-                                                    } else {
-                                                        info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
-                                                        let _ = sender.send(&Message::ClipboardSync { text }).await;
-                                                    }
-                                                } else if crate::file_clipboard::parse_clipboard_file_uris(&text).is_none() {
-                                                    info!("→ syncing clipboard on EdgeCrossed ({} bytes)", text.len());
-                                                    let _ = sender.send(&Message::ClipboardSync { text }).await;
-                                                }
-                                            }
-                                        }
+                                        sync_clipboard_on_entry(&mut sender, &ipc_state, &peer_files_enabled, addr).await;
                                     }
+                                } else {
+                                    // Boundary with no screen: retain cursor inside local screen
+                                    edge.place_at_entry(&crossed);
                                 }
                             }
                         }
@@ -624,19 +836,60 @@ pub async fn connect_to(
                 }
             }
 
-            // Broadcast messages (e.g. TopologySync, Goodbye) to peer
+            // Broadcast messages (e.g. TopologySync, Goodbye, ReturnControl, EdgeCrossed) to peer
             Ok(bmsg) = broadcast_rx.recv() => {
                 if matches!(bmsg, Message::Goodbye) {
                     info!("broadcast Goodbye received — disconnecting from peer {addr}");
                     let _ = grab_mouse_tx.send(false);
                     let _ = grab_keyboard_tx.send(false);
+                    ipc_state.lock().unwrap().is_forwarding = false;
                     let _ = sender.send(&Message::Goodbye).await;
                     break;
+                }
+                if matches!(bmsg, Message::ReturnControl { .. }) {
+                    if state == ControllerState::Forwarding {
+                        let target_edge = resolve_target_edge(&ipc_state, addr);
+                        info!("IPC ReturnControl: ungrabbing and returning to local screen");
+                        let _ = sender.send(&Message::ReturnControl { edge: target_edge, ratio: None }).await;
+                        let _ = grab_mouse_tx.send(false);
+                        let _ = grab_keyboard_tx.send(false);
+                        state = ControllerState::Local;
+                        active_coord = (0, 0);
+                        ipc_state.lock().unwrap().is_forwarding = false;
+                        edge.place_at_center();
+                        edge.arm_cooldown(Duration::from_millis(300));
+                    }
+                    continue;
+                }
+                if matches!(bmsg, Message::EdgeCrossed { .. }) {
+                    if state == ControllerState::Local {
+                        let target_edge = resolve_target_edge(&ipc_state, addr);
+                        info!("IPC SwitchScreen: grabbing and switching to peer screen ({addr})");
+                        let _ = grab_mouse_tx.send(true);
+                        let _ = grab_keyboard_tx.send(true);
+                        if let Err(e) = sender.send(&Message::EdgeCrossed { edge: target_edge, ratio: None }).await {
+                            warn!("failed to send EdgeCrossed on IPC switch: {e}");
+                            let _ = grab_mouse_tx.send(false);
+                            let _ = grab_keyboard_tx.send(false);
+                            ipc_state.lock().unwrap().is_forwarding = false;
+                            break;
+                        }
+                        state = ControllerState::Forwarding;
+                        active_coord = target_edge.delta();
+                        ipc_state.lock().unwrap().is_forwarding = true;
+                        edge.place_at_center();
+                        edge.arm_cooldown(Duration::from_millis(300));
+                        if clipboard_enabled {
+                            sync_clipboard_on_entry(&mut sender, &ipc_state, &peer_files_enabled, addr).await;
+                        }
+                    }
+                    continue;
                 }
                 if let Err(e) = sender.send(&bmsg).await {
                     warn!("failed to send broadcast msg to peer: {e}");
                     let _ = grab_mouse_tx.send(false);
                     let _ = grab_keyboard_tx.send(false);
+                    ipc_state.lock().unwrap().is_forwarding = false;
                     break;
                 }
             }
@@ -644,27 +897,27 @@ pub async fn connect_to(
             // Inbound signals from receiver task
             inbound = inbound_rx.recv() => {
                 match inbound {
-                    Some(InboundSignal::ReturnControl) => {
+                    Some(InboundSignal::ReturnControl(exit_edge, ratio)) => {
                         if state == ControllerState::Forwarding {
-                            info!("← ReturnControl — ungrabbing, back to local");
-                            let _ = grab_mouse_tx.send(false);
-                            let _ = grab_keyboard_tx.send(false);
-                            state = ControllerState::Local;
-                            let target_edge = {
-                                let s = ipc_state.lock().unwrap();
-                                let single_peer = s.peers.len() == 1;
-                                s.peers.iter()
-                                    .find(|p| single_peer || p.address == addr || addr.contains(&p.address) || p.address.contains(addr))
-                                    .map(|p| match p.position.to_lowercase().as_str() {
-                                        "left" => Edge::Left,
-                                        "above" | "top" => Edge::Top,
-                                        "below" | "bottom" => Edge::Bottom,
-                                        _ => Edge::Right,
-                                    })
-                                    .unwrap_or(Edge::Right)
-                            };
-                            edge.set_allowed_edge(Some(target_edge));
-                            edge.place_at_entry(&target_edge);
+                            let (edx, edy) = exit_edge.delta();
+                            let next_coord = (active_coord.0 + edx, active_coord.1 + edy);
+                            let grid = get_grid(&ipc_state);
+
+                            if next_coord == (0, 0) || grid.find_at(next_coord.0, next_coord.1).is_none() {
+                                info!("← ReturnControl ({exit_edge:?}, ratio={ratio:?}) from {active_coord:?} -> returning to local (0, 0)");
+                                let _ = grab_mouse_tx.send(false);
+                                let _ = grab_keyboard_tx.send(false);
+                                state = ControllerState::Local;
+                                active_coord = (0, 0);
+                                ipc_state.lock().unwrap().is_forwarding = false;
+                                let return_edge = exit_edge.opposite();
+                                edge.place_at_entry_ratio(&return_edge, ratio);
+                                edge.arm_cooldown(Duration::from_millis(300));
+                            } else {
+                                info!("← ReturnControl ({exit_edge:?}, ratio={ratio:?}) traversing from {active_coord:?} to adjacent screen at {next_coord:?}");
+                                active_coord = next_coord;
+                                let _ = sender.send(&Message::EdgeCrossed { edge: exit_edge, ratio }).await;
+                            }
                         }
                     }
                     Some(InboundSignal::Pong) => {

@@ -67,12 +67,15 @@ async fn main() -> anyhow::Result<()> {
     let initial_peers: Vec<manguesechee_core::ipc::PeerInfo> = cfg.peers.iter().filter_map(|p| {
         p.address.as_ref().map(|addr| {
             let is_paired = known_store.contains(&p.id);
+            let (gx, gy) = p.coordinates();
             manguesechee_core::ipc::PeerInfo {
                 name: p.id.clone(),
                 address: addr.clone(),
                 paired: is_paired,
                 connected: false,
                 position: p.position.clone(),
+                grid_x: gx,
+                grid_y: gy,
             }
         })
     }).collect();
@@ -82,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
             local_name:            local_name.clone(),
             discovery:             cfg.network.discovery,
             file_transfer_enabled: cfg.clipboard.files_enabled,
+            tls_enabled:           cfg.network.tls,
             peers:                 initial_peers,
             ..Default::default()
         }

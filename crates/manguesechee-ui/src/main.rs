@@ -1,5 +1,7 @@
 slint::include_modules!();
 
+mod tray;
+
 use manguesechee_core::{config, ipc};
 use slint::Model;
 use std::path::PathBuf;
@@ -10,6 +12,27 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let window = MainWindow::new()?;
+
+    // ── Window Lifecycle: Close-to-tray & Minimize-to-tray ───────────────────
+    window.window().on_close_requested(move || {
+        info!("Window close requested — minimizing to system tray");
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    {
+        let w = window.as_weak();
+        window.on_hide_to_tray(move || {
+            if let Some(w) = w.upgrade() {
+                info!("Hide to tray clicked");
+                let _ = w.hide();
+            }
+        });
+    }
+
+    // ── System Tray (StatusNotifierItem via ksni) ────────────────────────────
+    let tray = tray::ManguesecheeTray::new(window.as_weak());
+    let tray_handle = tray.spawn_tray();
+
     let first_run = !config::config_path().exists();
 
     if first_run {
@@ -86,11 +109,11 @@ fn main() -> anyhow::Result<()> {
 
             if !peer_addr.trim().is_empty() {
                 cfg.peers.clear();
-                cfg.peers.push(config::PeerConfig {
-                    id:       "primary-peer".to_string(),
-                    address:  Some(peer_addr.trim().to_string()),
-                    position: side.trim().to_lowercase(),
-                });
+                cfg.peers.push(config::PeerConfig::new(
+                    "primary-peer",
+                    Some(peer_addr.trim().to_string()),
+                    side.trim().to_lowercase(),
+                ));
             }
 
             if cfg.screen.width == 1920 && cfg.screen.height == 1080 {
@@ -139,10 +162,13 @@ fn main() -> anyhow::Result<()> {
                 cfg.network.port = port;
             }
 
-            // Discovery & Clipboard
+            // Discovery, Clipboard & TLS
             cfg.network.discovery = w.get_setting_discovery();
             cfg.clipboard.enabled = w.get_setting_clipboard();
             cfg.clipboard.files_enabled = w.get_setting_file_transfer();
+            let tls_enabled = w.get_setting_tls();
+            cfg.network.tls = tls_enabled;
+            send_ipc(ipc::GuiCommand::SetTls { enabled: tls_enabled });
 
             // Screen Dimensions
             if let Ok(width) = w.get_setting_width().trim().parse::<u32>() {
@@ -166,6 +192,13 @@ fn main() -> anyhow::Result<()> {
             cfg.input.cursor_locked = cursor_lock;
             send_ipc(ipc::GuiCommand::SetCursorLock { locked: cursor_lock });
 
+            // Global Hotkeys
+            cfg.hotkeys.toggle_cursor_lock = w.get_setting_hotkey_lock().trim().to_string();
+            cfg.hotkeys.switch_screen = w.get_setting_hotkey_switch().trim().to_string();
+            cfg.hotkeys.emergency_escape = w.get_setting_hotkey_escape().trim().to_string();
+            cfg.hotkeys.enabled = !cfg.hotkeys.toggle_cursor_lock.eq_ignore_ascii_case("disabled")
+                || !cfg.hotkeys.switch_screen.eq_ignore_ascii_case("disabled");
+
             // Autostart on boot (systemd user unit)
             let autostart_enabled = w.get_setting_autostart();
             if autostart_enabled {
@@ -179,11 +212,11 @@ fn main() -> anyhow::Result<()> {
             let peer_pos = w.get_setting_peer_pos().trim().to_lowercase();
             if !peer_ip.is_empty() {
                 cfg.peers.clear();
-                cfg.peers.push(config::PeerConfig {
-                    id: "primary-peer".to_string(),
-                    address: Some(peer_ip),
-                    position: peer_pos,
-                });
+                cfg.peers.push(config::PeerConfig::new(
+                    "primary-peer",
+                    Some(peer_ip),
+                    peer_pos,
+                ));
             }
 
             match config::save(&cfg) {
@@ -215,11 +248,11 @@ fn main() -> anyhow::Result<()> {
             }
 
             if cfg.peers.is_empty() {
-                cfg.peers.push(config::PeerConfig {
-                    id: "primary-peer".to_string(),
-                    address: None,
-                    position: pos_clean.clone(),
-                });
+                cfg.peers.push(config::PeerConfig::new(
+                    "primary-peer",
+                    None,
+                    pos_clean.clone(),
+                ));
             } else {
                 for p in &mut cfg.peers {
                     p.position = pos_clean.clone();
@@ -246,6 +279,86 @@ fn main() -> anyhow::Result<()> {
                 address: target_addr,
                 position: pos_clean.clone(),
             });
+        });
+    }
+
+    // ── Topology Grid Save ───────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_save_topology_grid(move |addr, gx, gy| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+            let mut cfg = config::load().unwrap_or_default();
+
+            let pos_str = match (gx, gy) {
+                (-1, 0) => "left".to_string(),
+                (1, 0) => "right".to_string(),
+                (0, 1) => "above".to_string(),
+                (0, -1) => "below".to_string(),
+                (x, _) if x < 0 => "left".to_string(),
+                (x, _) if x > 0 => "right".to_string(),
+                (_, y) if y > 0 => "above".to_string(),
+                _ => "below".to_string(),
+            };
+
+            let mut found = false;
+            for p in &mut cfg.peers {
+                if addr_str.is_empty()
+                    || p.address.as_deref() == Some(&addr_str)
+                    || (p.address.is_some() && addr_str.contains(p.address.as_ref().unwrap()))
+                {
+                    p.grid_x = Some(gx);
+                    p.grid_y = Some(gy);
+                    p.position = pos_str.clone();
+                    found = true;
+                }
+            }
+            if !found {
+                if !addr_str.is_empty() {
+                    cfg.peers.push(config::PeerConfig::with_coords(
+                        format!("peer-{}", addr_str.replace(':', "_")),
+                        Some(addr_str.clone()),
+                        gx,
+                        gy,
+                    ));
+                } else {
+                    cfg.peers.push(config::PeerConfig::with_coords(
+                        "primary-peer",
+                        None,
+                        gx,
+                        gy,
+                    ));
+                }
+            }
+            let _ = config::save(&cfg);
+
+            let target_addr = if !addr_str.is_empty() {
+                addr_str.clone()
+            } else {
+                cfg.peers.iter()
+                    .find_map(|p| p.address.clone().filter(|a| !a.trim().is_empty()))
+                    .unwrap_or_default()
+            };
+
+            send_ipc(ipc::GuiCommand::SyncTopologyGrid {
+                address: target_addr,
+                grid_x: gx,
+                grid_y: gy,
+            });
+
+            let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+            for p in &mut peers {
+                if addr_str.is_empty() || p.address == addr_str.as_str() || addr_str.contains(p.address.as_str()) {
+                    p.grid_x = gx;
+                    p.grid_y = gy;
+                    p.position = pos_str.clone().into();
+                }
+            }
+            w.set_peers(peers.as_slice().into());
+            w.set_setting_peer_pos(pos_str.clone().into());
+            w.set_settings_feedback(format!("✓ 2D Grid updated: Screen placed at ({gx}, {gy}) [{pos_str}]").into());
+            w.set_topology_configured(true);
+            w.set_topology_notice(format!("Screen grid coordinates set to ({gx}, {gy}). Traversable via mouse and Ctrl+Alt+Arrows.").into());
         });
     }
 
@@ -336,6 +449,7 @@ fn main() -> anyhow::Result<()> {
     // ── Cursor Lock & Edge Switching IPC ──────────────────────────────────────
     {
         let w = window.as_weak();
+        let th = tray_handle.clone();
         window.on_toggle_cursor_lock(move || {
             let Some(w) = w.upgrade() else { return };
             let new_lock = !w.get_cursor_locked();
@@ -344,6 +458,11 @@ fn main() -> anyhow::Result<()> {
             if let Ok(mut cfg) = config::load() {
                 cfg.input.cursor_locked = new_lock;
                 let _ = config::save(&cfg);
+            }
+            if let Some(ref handle) = th {
+                handle.update(move |t| {
+                    t.cursor_locked = new_lock;
+                });
             }
             w.set_settings_feedback(if new_lock {
                 "🔒 Cursor locked to local screen".into()
@@ -442,11 +561,11 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if !found {
-                    cfg.peers.push(config::PeerConfig {
-                        id: format!("peer-{}", addr_str.replace(':', "_")),
-                        address: Some(addr_str.clone()),
-                        position: pos_str.clone(),
-                    });
+                    cfg.peers.push(config::PeerConfig::new(
+                        format!("peer-{}", addr_str.replace(':', "_")),
+                        Some(addr_str.clone()),
+                        pos_str.clone(),
+                    ));
                 }
                 let _ = config::save(&cfg);
             }
@@ -477,8 +596,16 @@ fn main() -> anyhow::Result<()> {
     // ── Connect & Disconnect IPC ─────────────────────────────────────────────
     {
         let w = window.as_weak();
+        let th = tray_handle.clone();
         window.on_connect_requested(move |addr| {
             send_ipc(ipc::GuiCommand::Connect { address: addr.to_string() });
+            if let Some(ref handle) = th {
+                let addr_s = addr.to_string();
+                handle.update(move |t| {
+                    t.status_text = format!("Connecting to {addr_s}…");
+                    t.connected_to = Some(addr_s);
+                });
+            }
             if let Some(w) = w.upgrade() {
                 w.set_connection_error("".into());
                 w.set_topology_configured(false);
@@ -489,8 +616,16 @@ fn main() -> anyhow::Result<()> {
     }
     {
         let w = window.as_weak();
+        let th = tray_handle.clone();
         window.on_disconnect_requested(move || {
             send_ipc(ipc::GuiCommand::Disconnect);
+            if let Some(ref handle) = th {
+                handle.update(|t| {
+                    t.status_text = "Disconnected".into();
+                    t.connected_to = None;
+                    t.is_forwarding = false;
+                });
+            }
             if let Some(w) = w.upgrade() {
                 w.set_connected_peer("".into());
                 w.set_topology_configured(false);
@@ -523,10 +658,24 @@ fn main() -> anyhow::Result<()> {
             }
         });
     }
+    {
+        let w = window.as_weak();
+        window.on_toggle_tls(move |enabled| {
+            send_ipc(ipc::GuiCommand::SetTls { enabled });
+            if let Ok(mut cfg) = config::load() {
+                cfg.network.tls = enabled;
+                let _ = config::save(&cfg);
+            }
+            if let Some(w) = w.upgrade() {
+                w.set_setting_tls(enabled);
+            }
+        });
+    }
 
     // ── Background Polling Timer (Every 2s) ──────────────────────────────────
     let _poll_timer = {
         let w = window.as_weak();
+        let th = tray_handle.clone();
         let timer = slint::Timer::default();
         timer.start(
             slint::TimerMode::Repeated,
@@ -540,17 +689,46 @@ fn main() -> anyhow::Result<()> {
 
                 if !service_running {
                     w.set_status("Service Stopped".into());
+                    if let Some(ref handle) = th {
+                        handle.update(|t| {
+                            t.status_text = "Service Stopped".into();
+                            t.is_service_running = false;
+                            t.is_forwarding = false;
+                            t.connected_to = None;
+                        });
+                    }
                     return;
                 }
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, file_transfer_enabled, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history,
+                    local_name, connected_to, discovery, file_transfer_enabled, tls_enabled, tls_active, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history, ..
                 }) = poll_status()
                 {
+                    if let Some(ref handle) = th {
+                        let status_str = match &connected_to {
+                            Some(p) => format!("Forwarding → {p}"),
+                            None    => "Ready".into(),
+                        };
+                        let is_fwd = connected_to.is_some();
+                        let locked = cursor_locked;
+                        let conn = connected_to.clone();
+                        let p_list = peers.clone();
+                        handle.update(move |t| {
+                            t.status_text = status_str;
+                            t.is_service_running = true;
+                            t.is_forwarding = is_fwd;
+                            t.cursor_locked = locked;
+                            t.connected_to = conn;
+                            t.peers = p_list;
+                        });
+                    }
+
                     w.set_local_name(local_name.into());
                     w.set_discovery(discovery);
                     w.set_setting_file_transfer(file_transfer_enabled);
+                    w.set_setting_tls(tls_enabled);
+                    w.set_tls_active(tls_active);
                     w.set_cursor_locked(cursor_locked);
                     w.set_status(match &connected_to {
                         Some(p) => format!("Forwarding → {p}").into(),
@@ -657,6 +835,8 @@ fn main() -> anyhow::Result<()> {
                             connected:   p.connected,
                             position:    if !p.position.is_empty() { p.position.clone().into() } else { default_pos.clone().into() },
                             ping_status: existing_ping,
+                            grid_x:      p.grid_x,
+                            grid_y:      p.grid_y,
                         }
                     }).collect();
                     w.set_peers(entries.as_slice().into());
@@ -677,6 +857,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     window.run()?;
+    if let Some(th) = tray_handle {
+        th.shutdown().wait();
+    }
     Ok(())
 }
 
@@ -690,6 +873,7 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_setting_discovery(cfg.network.discovery);
     w.set_setting_clipboard(cfg.clipboard.enabled);
     w.set_setting_file_transfer(cfg.clipboard.files_enabled);
+    w.set_setting_tls(cfg.network.tls);
     w.set_setting_autostart(is_autostart_enabled());
     w.set_setting_width(cfg.screen.width.to_string().into());
     w.set_setting_height(cfg.screen.height.to_string().into());
@@ -697,6 +881,9 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_setting_deadzone(cfg.input.corner_deadzone_px.to_string().into());
     w.set_setting_velocity(cfg.input.edge_velocity_threshold.to_string().into());
     w.set_cursor_locked(cfg.input.cursor_locked);
+    w.set_setting_hotkey_lock(cfg.hotkeys.toggle_cursor_lock.clone().into());
+    w.set_setting_hotkey_switch(cfg.hotkeys.switch_screen.clone().into());
+    w.set_setting_hotkey_escape(cfg.hotkeys.emergency_escape.clone().into());
 
     // Role: 0=Both, 1=Controller, 2=Peer
     let role = if !cfg.input.enabled {
