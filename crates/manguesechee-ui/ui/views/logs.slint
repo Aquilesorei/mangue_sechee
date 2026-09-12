@@ -1,4 +1,5 @@
 import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
 
 export component LogsView inherits VerticalBox {
     in-out property <int> log-level-filter: 0; // 0=All, 1=Errors, 2=Warnings, 3=Info
@@ -18,65 +19,86 @@ export component LogsView inherits VerticalBox {
     // Filter toolbar
     HorizontalBox {
         spacing: 8px;
-        Text { text: "Filter:"; color: #8e90a6; font-size: 12px; vertical-alignment: center; }
+        Text {
+            text: "Filter:";
+            color: Theme.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
         log-search := LineEdit {
-            placeholder-text: "Search logs (e.g. error, pop-os, mouse)...";
+            placeholder-text: "Search logs (e.g. error, mouse, connected)...";
             text <=> root.log-filter;
             edited => { root.filter-logs-text(self.text); }
             horizontal-stretch: 1;
         }
         Button {
-            text: root.log-level-filter == 0 ? "● All" : "All";
+            text: "All";
+            primary: root.log-level-filter == 0;
             clicked => { root.log-level-filter = 0; root.filter-logs-level(0); }
         }
         Button {
-            text: root.log-level-filter == 1 ? "● Errors" : "Errors";
+            text: "Errors";
+            primary: root.log-level-filter == 1;
             clicked => { root.log-level-filter = 1; root.filter-logs-level(1); }
         }
         Button {
-            text: root.log-level-filter == 2 ? "● Warnings" : "Warnings";
+            text: "Warnings";
+            primary: root.log-level-filter == 2;
             clicked => { root.log-level-filter = 2; root.filter-logs-level(2); }
         }
         Button {
-            text: root.log-level-filter == 3 ? "● Info" : "Info";
+            text: "Info";
+            primary: root.log-level-filter == 3;
             clicked => { root.log-level-filter = 3; root.filter-logs-level(3); }
         }
     }
 
     HorizontalBox {
-        Text { text: "Live Agent Activity & Events"; color: #8e90a6; font-size: 13px; vertical-alignment: center; }
-        Rectangle { horizontal-stretch: 1; }
-        if root.logs-feedback != "" : Text {
-            text: root.logs-feedback;
-            color: #4ade80;
+        Text {
+            text: "Live Agent Activity & Events";
+            color: Theme.text-secondary;
             font-size: 13px;
             font-weight: 600;
             vertical-alignment: center;
         }
+        Rectangle { horizontal-stretch: 1; }
         Button {
-            text: "📋 Copy Logs";
+            text: "Copy Logs";
             primary: true;
             clicked => { root.copy-logs(); }
         }
-        Button { text: "🔄 Refresh"; clicked => { root.refresh-logs(); } }
-        Button { text: "Clear"; clicked => { root.clear-logs(); } }
+        Button {
+            text: "Refresh";
+            clicked => { root.refresh-logs(); }
+        }
+        Button {
+            text: "Clear";
+            clicked => { root.clear-logs(); }
+        }
     }
 
+    // Terminal Screen
     Rectangle {
-        background: #090a10; border-radius: 6px; border-width: 1px; border-color: #232536;
+        background: Theme.surface-inset;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
         vertical-stretch: 1;
+
         ScrollView {
             VerticalBox {
-                padding: 12px; spacing: 4px;
+                padding: 12px;
+                spacing: 3px;
                 for line in root.log-lines : Text {
                     text: line;
                     font-size: 11px;
                     font-family: "monospace";
-                    color: #cbd5e1;
+                    color: Theme.text-primary;
                 }
                 if root.log-lines.length == 0 : Text {
                     text: "No logs matching current filter. Click Refresh or clear search.";
-                    font-size: 12px; color: #64748b;
+                    font-size: 12px;
+                    color: Theme.text-muted;
                 }
             }
         }

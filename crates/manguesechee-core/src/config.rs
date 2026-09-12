@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use anyhow::Context;
 
-// ── Top-level config ──────────────────────────────────────────────────────────
+fn default_theme() -> String {
+    "dark".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,6 +18,8 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     pub screen:    ScreenConfig,
     pub peers:     Vec<PeerConfig>,
+    #[serde(default = "default_theme")]
+    pub theme:     String,
 }
 
 impl Default for Config {
@@ -28,6 +32,7 @@ impl Default for Config {
             clipboard: ClipboardConfig::default(),
             screen:    ScreenConfig::default(),
             peers:     Vec::new(),
+            theme:     "dark".to_string(),
         }
     }
 }

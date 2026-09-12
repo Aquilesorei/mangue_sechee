@@ -53,6 +53,126 @@ fn main() -> anyhow::Result<()> {
         populate_settings_from_config(&window, &cfg);
     }
 
+    // ── Toast Dismiss ────────────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_dismiss_toast(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_toast_visible(false);
+            }
+        });
+    }
+
+    // ── Theme Switcher ────────────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_toggle_theme(move || {
+            let Some(w) = w.upgrade() else { return };
+            let new_is_dark = !w.get_is_dark();
+            w.set_is_dark(new_is_dark);
+            if let Ok(mut cfg) = config::load() {
+                cfg.theme = if new_is_dark { "dark".into() } else { "light".into() };
+                let _ = config::save(&cfg);
+            }
+            show_toast(&w, if new_is_dark { "Switched to Dark theme" } else { "Switched to Light theme" }, false);
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_theme_changed(move |idx| {
+            let Some(w) = w.upgrade() else { return };
+            let new_is_dark = idx == 0;
+            w.set_is_dark(new_is_dark);
+            if let Ok(mut cfg) = config::load() {
+                cfg.theme = if new_is_dark { "dark".into() } else { "light".into() };
+                let _ = config::save(&cfg);
+            }
+            show_toast(&w, if new_is_dark { "Switched to Dark theme" } else { "Switched to Light theme" }, false);
+        });
+    }
+
+    // ── Modal Dialog Controls ────────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_open_connect_modal(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_active_modal(1);
+            }
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_close_modal(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_active_modal(0);
+                w.set_modal_target_addr("".into());
+            }
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_open_unpair_modal(move |addr| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+            w.set_modal_target_addr(addr_str.clone().into());
+            w.set_modal_title("Unpair Machine".into());
+            w.set_modal_message(format!("Are you sure you want to unpair {addr_str}? You will need to pair again to share controls.").into());
+            w.set_active_modal(2);
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_modal_connect_submitted(move |addr, side| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.trim().to_string();
+            let side_str = side.trim().to_lowercase();
+            w.set_active_modal(0);
+            if addr_str.is_empty() { return; }
+
+            if let Ok(mut cfg) = config::load() {
+                let mut found = false;
+                for p in &mut cfg.peers {
+                    if p.address.as_deref() == Some(&addr_str) {
+                        p.position = side_str.clone();
+                        found = true;
+                    }
+                }
+                if !found {
+                    cfg.peers.push(config::PeerConfig::new(
+                        format!("peer-{}", addr_str.replace(':', "_")),
+                        Some(addr_str.clone()),
+                        side_str.clone(),
+                    ));
+                }
+                let _ = config::save(&cfg);
+            }
+
+            send_ipc(ipc::GuiCommand::Connect { address: addr_str.clone() });
+            show_toast(&w, &format!("Connecting to {addr_str}…"), false);
+        });
+    }
+    {
+        let w = window.as_weak();
+        window.on_modal_confirm_submitted(move || {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = w.get_modal_target_addr().to_string();
+            w.set_active_modal(0);
+            w.set_modal_target_addr("".into());
+
+            if !addr_str.is_empty() {
+                send_ipc(ipc::GuiCommand::ForgetPeer { address: addr_str.clone() });
+                if let Ok(mut cfg) = config::load() {
+                    cfg.peers.retain(|p| p.address.as_deref() != Some(&addr_str) && !p.address.as_deref().is_some_and(|a| !a.is_empty() && addr_str.contains(a)));
+                    let _ = config::save(&cfg);
+                }
+                let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+                peers.retain(|p| p.address != addr_str.as_str() && !addr_str.contains(p.address.as_str()));
+                w.set_peers(peers.as_slice().into());
+                show_toast(&w, &format!("Unpaired {addr_str}"), false);
+            }
+        });
+    }
+
     // ── Service Controls (Start, Stop, Restart) ──────────────────────────────
     {
         let w = window.as_weak();
@@ -65,7 +185,7 @@ fn main() -> anyhow::Result<()> {
             ensure_agent_running();
             w.set_is_service_running(true);
             w.set_status("Running".into());
-            w.set_settings_feedback("✓ Agent daemon started".into());
+            show_toast(&w, "Agent daemon started", false);
         });
     }
     {
@@ -79,7 +199,7 @@ fn main() -> anyhow::Result<()> {
             send_ipc(ipc::GuiCommand::Shutdown);
             w.set_is_service_running(false);
             w.set_status("Service Stopped".into());
-            w.set_settings_feedback("✓ Agent daemon stopped".into());
+            show_toast(&w, "Agent daemon stopped", false);
         });
     }
     {
@@ -92,7 +212,7 @@ fn main() -> anyhow::Result<()> {
                 .args(["--user", "restart", "manguesechee-agent"])
                 .status();
             w.set_is_service_running(true);
-            w.set_settings_feedback("✓ Agent daemon restarted".into());
+            show_toast(&w, "Agent daemon restarted", false);
         });
     }
 
@@ -219,16 +339,18 @@ fn main() -> anyhow::Result<()> {
                 ));
             }
 
+            cfg.theme = if w.get_is_dark() { "dark".into() } else { "light".into() };
+
             match config::save(&cfg) {
                 Ok(_) => {
                     info!("configuration saved");
-                    w.set_settings_feedback("✓ Settings saved! Restarting agent service…".into());
+                    show_toast(&w, "Settings saved & service restarted", false);
                     restart_agent_service();
                     populate_settings_from_config(&w, &cfg);
                 }
                 Err(e) => {
                     warn!("failed to save config: {e}");
-                    w.set_settings_feedback(format!("Error: {e}").into());
+                    show_toast(&w, &format!("Config error: {e}"), true);
                 }
             }
         });
@@ -261,7 +383,7 @@ fn main() -> anyhow::Result<()> {
 
             let _ = config::save(&cfg);
             w.set_setting_peer_pos(pos_clean.clone().into());
-            w.set_settings_feedback(format!("✓ Topology synced: Peer positioned on the {pos_clean}").into());
+            show_toast(&w, &format!("Topology synced: Peer positioned on the {pos_clean}"), false);
             w.set_topology_configured(true);
             let pos_disp = match pos_clean.as_str() {
                 "left" => "Left",
@@ -356,7 +478,7 @@ fn main() -> anyhow::Result<()> {
             }
             w.set_peers(peers.as_slice().into());
             w.set_setting_peer_pos(pos_str.clone().into());
-            w.set_settings_feedback(format!("✓ 2D Grid updated: Screen placed at ({gx}, {gy}) [{pos_str}]").into());
+            show_toast(&w, &format!("2D Grid updated: Screen placed at ({gx}, {gy})"), false);
             w.set_topology_configured(true);
             w.set_topology_notice(format!("Screen grid coordinates set to ({gx}, {gy}). Traversable via mouse and Ctrl+Alt+Arrows.").into());
         });
@@ -370,9 +492,9 @@ fn main() -> anyhow::Result<()> {
             if let Some((width, height)) = manguesechee_input::try_detect_screen_size() {
                 w.set_setting_width(width.to_string().into());
                 w.set_setting_height(height.to_string().into());
-                w.set_settings_feedback(format!("✓ Auto-detected screen geometry: {width}×{height}").into());
+                show_toast(&w, &format!("Auto-detected screen geometry: {width}×{height}"), false);
             } else {
-                w.set_settings_feedback("⚠ Hardware detection unavailable; keeping configured geometry".into());
+                show_toast(&w, "Hardware detection unavailable; keeping current geometry", true);
             }
         });
     }
@@ -391,17 +513,10 @@ fn main() -> anyhow::Result<()> {
             let _ = std::fs::write("/tmp/manguesechee-latest-logs.txt", &all_text);
             let success = copy_to_clipboard(&all_text);
             if success {
-                w.set_logs_feedback("✓ Copied! (Saved: /tmp/manguesechee-latest-logs.txt)".into());
+                show_toast(&w, "Logs copied to clipboard", false);
             } else {
-                w.set_logs_feedback("Saved to /tmp/manguesechee-latest-logs.txt".into());
+                show_toast(&w, "Logs saved to /tmp/manguesechee-latest-logs.txt", false);
             }
-
-            let w_feedback = w.as_weak();
-            slint::Timer::single_shot(std::time::Duration::from_secs(4), move || {
-                if let Some(w) = w_feedback.upgrade() {
-                    w.set_logs_feedback("".into());
-                }
-            });
         });
     }
     {
@@ -464,11 +579,11 @@ fn main() -> anyhow::Result<()> {
                     t.cursor_locked = new_lock;
                 });
             }
-            w.set_settings_feedback(if new_lock {
-                "🔒 Cursor locked to local screen".into()
+            show_toast(&w, if new_lock {
+                "Cursor locked to local screen"
             } else {
-                "🔓 Cursor unlocked — edge switching enabled".into()
-            });
+                "Cursor unlocked — edge switching enabled"
+            }, false);
         });
     }
 
@@ -505,15 +620,15 @@ fn main() -> anyhow::Result<()> {
                             match std::net::TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_millis(1500)) {
                                 Ok(_) => {
                                     let ms = start.elapsed().as_millis();
-                                    format!("✓ {ms}ms")
+                                    format!("{ms}ms")
                                 }
-                                Err(_) => "⚠ Timeout".to_string(),
+                                Err(_) => "Timeout".to_string(),
                             }
                         } else {
-                            "⚠ Invalid".to_string()
+                            "Invalid".to_string()
                         }
                     }
-                    Err(_) => "⚠ Unresolved".to_string(),
+                    Err(_) => "Unresolved".to_string(),
                 };
 
                 let _ = slint::invoke_from_event_loop(move || {
@@ -543,7 +658,7 @@ fn main() -> anyhow::Result<()> {
             let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
             peers.retain(|p| p.address != addr_str.as_str() && !addr_str.contains(p.address.as_str()));
             w.set_peers(peers.as_slice().into());
-            w.set_settings_feedback(format!("✓ Unpaired peer {addr_str}").into());
+            show_toast(&w, &format!("Unpaired peer {addr_str}"), false);
         });
     }
     {
@@ -581,7 +696,7 @@ fn main() -> anyhow::Result<()> {
             }
             w.set_peers(peers.as_slice().into());
             w.set_setting_peer_pos(pos_str.clone().into());
-            w.set_settings_feedback(format!("✓ Position updated & synced: peer placed on the {pos_str}").into());
+            show_toast(&w, &format!("Position updated: peer placed on the {pos_str}"), false);
             w.set_topology_configured(true);
             let pos_disp = match pos_str.as_str() {
                 "left" => "Left",
@@ -865,7 +980,21 @@ fn main() -> anyhow::Result<()> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+fn show_toast(w: &MainWindow, msg: &str, is_error: bool) {
+    w.set_toast_text(msg.into());
+    w.set_toast_is_error(is_error);
+    w.set_toast_visible(true);
+    let w_weak = w.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_millis(3500), move || {
+        if let Some(w) = w_weak.upgrade() {
+            w.set_toast_visible(false);
+        }
+    });
+}
+
 fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
+    let is_dark = cfg.theme.as_str() != "light";
+    w.set_is_dark(is_dark);
     w.set_local_ip(detect_local_ip().into());
     w.set_local_name(cfg.device.name.clone().into());
     w.set_setting_name(cfg.device.name.clone().into());

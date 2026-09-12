@@ -1,4 +1,5 @@
 import { Button, HorizontalBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
 
 export component HeaderBar inherits Rectangle {
     in property <int> active-tab: 0;
@@ -15,17 +16,24 @@ export component HeaderBar inherits Rectangle {
     callback hide-to-tray();
 
     height: 52px;
-    background: #181926;
+    background: Theme.surface-card;
     border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
 
     HorizontalBox {
-        padding-left: 16px; padding-right: 16px; spacing: 12px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
+
         Text {
             text: root.active-tab == 0 ? "Peers & Connections"
                 : (root.active-tab == 1 ? "Screen Topology Layout"
                 : (root.active-tab == 4 ? "File Transfers & History"
                 : (root.active-tab == 2 ? "System Settings" : "System Logs")));
-            font-size: 17px; font-weight: 700; color: #e0e0ff;
+            font-size: 16px;
+            font-weight: 700;
+            color: Theme.text-primary;
             vertical-alignment: center;
         }
 
@@ -33,16 +41,30 @@ export component HeaderBar inherits Rectangle {
 
         // TLS Security Pill (when connected)
         if root.connected-peer != "" : Rectangle {
-            background: root.tls-active ? #0e3020 : #30200e;
-            border-radius: 12px; height: 28px;
+            background: root.tls-active ? Theme.success-bg : Theme.warning-bg;
+            border-radius: 12px;
+            height: 28px;
             border-width: 1px;
-            border-color: root.tls-active ? #22c55e : #f59e0b;
+            border-color: root.tls-active ? Theme.success-border : Theme.warning-border;
+
             HorizontalBox {
-                padding-left: 10px; padding-right: 10px; spacing: 4px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 6px;
+
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: root.tls-active ? Theme.success : Theme.warning;
+                    y: (parent.height - self.height) / 2;
+                }
+
                 Text {
-                    text: root.tls-active ? "🔒 TLS Encrypted" : "🔓 Unencrypted";
-                    font-size: 11px; font-weight: 600;
-                    color: root.tls-active ? #4ade80 : #fbbf24;
+                    text: root.tls-active ? "TLS Active" : "Unencrypted";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: root.tls-active ? Theme.success-text : Theme.warning-text;
                     vertical-alignment: center;
                 }
             }
@@ -50,18 +72,30 @@ export component HeaderBar inherits Rectangle {
 
         // Status Badge
         Rectangle {
-            background: #232536; border-radius: 12px; height: 28px;
+            background: Theme.surface-secondary;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            height: 28px;
+
             HorizontalBox {
-                padding-left: 10px; padding-right: 10px; spacing: 6px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 6px;
+
                 Rectangle {
-                    width: 7px; height: 7px; border-radius: 3.5px;
-                    background: root.is-service-running ? #4ade80 : #ef4444;
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: root.is-service-running ? Theme.success : Theme.error;
                     y: (parent.height - self.height) / 2;
                 }
+
                 Text {
-                    text: root.is-service-running ? root.status : "Service Stopped";
-                    font-size: 12px;
-                    color: root.is-service-running ? #a5b4fc : #f87171;
+                    text: root.is-service-running ? root.status : "Daemon Stopped";
+                    font-size: 11px;
+                    font-weight: 500;
+                    color: root.is-service-running ? Theme.text-primary : Theme.error-text;
                     vertical-alignment: center;
                 }
             }
@@ -69,7 +103,7 @@ export component HeaderBar inherits Rectangle {
 
         // Cursor Lock Toggle Button
         Button {
-            text: root.cursor-locked ? "🔒 Cursor Locked" : "🔓 Lock Cursor";
+            text: root.cursor-locked ? "Cursor Locked" : "Lock Cursor";
             primary: root.cursor-locked;
             enabled: root.is-service-running;
             clicked => { root.toggle-cursor-lock(); }
@@ -77,7 +111,7 @@ export component HeaderBar inherits Rectangle {
 
         // Minimize to Tray Button
         Button {
-            text: "📥 Hide to Tray";
+            text: "Hide to Tray";
             clicked => { root.hide-to-tray(); }
         }
 
@@ -85,16 +119,16 @@ export component HeaderBar inherits Rectangle {
         if root.is-service-running : HorizontalBox {
             spacing: 6px;
             Button {
-                text: "🔄 Restart";
+                text: "Restart";
                 clicked => { root.restart-service(); }
             }
             Button {
-                text: "⏹ Stop";
+                text: "Stop";
                 clicked => { root.stop-service(); }
             }
         }
         if !root.is-service-running : Button {
-            text: "▶ Start Daemon";
+            text: "Start Daemon";
             primary: true;
             clicked => { root.start-service(); }
         }

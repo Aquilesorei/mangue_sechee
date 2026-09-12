@@ -1,0 +1,67 @@
+import { Theme } from "../theme.slint";
+
+export component Snackbar inherits Rectangle {
+    in property <bool> show: false;
+    in property <string> message: "";
+    in property <bool> is-error: false;
+    callback dismiss();
+
+    width: 440px;
+    height: 46px;
+    border-radius: 8px;
+    background: root.is-error ? Theme.error-bg : Theme.surface-card;
+    border-width: 1px;
+    border-color: root.is-error ? Theme.error-border : Theme.border-strong;
+    visible: root.show;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: Theme.is-dark ? #00000088 : #0f172a25;
+    drop-shadow-offset-y: 4px;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        // Semantic status pip
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.is-error ? Theme.error : Theme.primary;
+            y: (parent.height - self.height) / 2;
+        }
+
+        // Notification message
+        Text {
+            text: root.message;
+            font-size: 13px;
+            font-weight: 500;
+            color: root.is-error ? Theme.error-text : Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        // Dismiss action
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 14px;
+            background: dismiss-touch.has-hover ? Theme.surface-hover : transparent;
+            y: (parent.height - self.height) / 2;
+
+            Text {
+                text: "✕";
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            dismiss-touch := TouchArea {
+                clicked => { root.dismiss(); }
+            }
+        }
+    }
+}

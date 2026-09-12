@@ -1,0 +1,261 @@
+import { Button, LineEdit, ComboBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+
+export component ManualConnectModal inherits Rectangle {
+    in-out property <string> address-input: "";
+    in-out property <string> side-input: "right";
+    callback connect(string, string);
+    callback cancel();
+
+    // Scrim overlay covering parent
+    background: Theme.scrim;
+
+    TouchArea {
+        clicked => { root.cancel(); }
+    }
+
+    // Centered Dialog Window
+    Rectangle {
+        width: 440px;
+        height: 290px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: Theme.modal-bg;
+        border-width: 1px;
+        border-color: Theme.modal-border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: Theme.is-dark ? #000000a6 : #0f172a33;
+        drop-shadow-offset-y: 8px;
+
+        // Prevent clicking inside modal from dismissing
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            // Dialog Header
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Connect to Machine";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Enter the IP address of the target machine running Manguesechee.";
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Address Input
+            VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Machine Network Address:";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text-secondary;
+                }
+                addr-input := LineEdit {
+                    height: 38px;
+                    placeholder-text: "192.168.1.50:24800";
+                    text <=> root.address-input;
+                }
+            }
+
+            // Placement Side
+            VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Relative Screen Placement:";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text-secondary;
+                }
+                ComboBox {
+                    height: 36px;
+                    model: ["Right", "Left", "Above", "Below"];
+                    current-index: root.side-input == "left" ? 1 : (root.side-input == "above" ? 2 : (root.side-input == "below" ? 3 : 0));
+                    selected => { root.side-input = self.current-value.to-lowercase(); }
+                }
+            }
+
+            // Actions
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                Button {
+                    text: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: "Connect Machine";
+                    primary: true;
+                    enabled: root.address-input != "";
+                    clicked => { root.connect(root.address-input, root.side-input); }
+                }
+            }
+        }
+    }
+}
+
+export component ConfirmModal inherits Rectangle {
+    in property <string> title: "Confirm Action";
+    in property <string> message: "Are you sure you want to proceed?";
+    in property <string> confirm-text: "Confirm";
+    in property <bool> is-destructive: false;
+    callback confirm();
+    callback cancel();
+
+    // Scrim overlay
+    background: Theme.scrim;
+
+    TouchArea {
+        clicked => { root.cancel(); }
+    }
+
+    // Centered Dialog
+    Rectangle {
+        width: 420px;
+        height: 200px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: Theme.modal-bg;
+        border-width: 1px;
+        border-color: root.is-destructive ? Theme.error-border : Theme.modal-border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: Theme.is-dark ? #000000a6 : #0f172a33;
+        drop-shadow-offset-y: 8px;
+
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.title;
+                    font-size: 17px;
+                    font-weight: 700;
+                    color: root.is-destructive ? Theme.error-text : Theme.text-primary;
+                }
+                Text {
+                    text: root.message;
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                Button {
+                    text: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: root.confirm-text;
+                    primary: true;
+                    clicked => { root.confirm(); }
+                }
+            }
+        }
+    }
+}
+
+export component PairingPinModal inherits Rectangle {
+    in property <string> peer-name: "Remote Machine";
+    in property <string> pin-code: "482 915";
+    callback confirm();
+    callback cancel();
+
+    background: Theme.scrim;
+
+    TouchArea {
+        clicked => { root.cancel(); }
+    }
+
+    Rectangle {
+        width: 440px;
+        height: 270px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: Theme.modal-bg;
+        border-width: 1px;
+        border-color: Theme.modal-border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: Theme.is-dark ? #000000a6 : #0f172a33;
+        drop-shadow-offset-y: 8px;
+
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Pairing Verification";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Verify this 6-digit security code matches the prompt on " + root.peer-name + " before approving connection:";
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // PIN Display Badge
+            Rectangle {
+                height: 58px;
+                border-radius: 8px;
+                background: Theme.surface-inset;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                Text {
+                    text: root.pin-code;
+                    font-size: 24px;
+                    font-weight: 700;
+                    font-family: "monospace";
+                    color: Theme.primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    letter-spacing: 4px;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                Button {
+                    text: "Reject / Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: "Confirm & Pair";
+                    primary: true;
+                    clicked => { root.confirm(); }
+                }
+            }
+        }
+    }
+}

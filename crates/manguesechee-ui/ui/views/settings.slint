@@ -1,4 +1,5 @@
 import { Button, VerticalBox, HorizontalBox, GroupBox, LineEdit, Switch, ComboBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
 
 export component SettingsView inherits ScrollView {
     in-out property <string> setting-name: "fedora";
@@ -20,30 +21,36 @@ export component SettingsView inherits ScrollView {
     in-out property <string> setting-height: "1080";
     in-out property <string> setting-peer-addr: "";
     in-out property <string> setting-peer-pos: "right";
+    in-out property <int> setting-theme: Theme.is-dark ? 0 : 1; // 0=Dark, 1=Light
     in property <string> settings-feedback: "";
 
     callback toggle-file-transfer(bool);
     callback toggle-tls(bool);
     callback auto-detect-screen();
     callback save-settings();
+    callback theme-changed(int);
 
     vertical-stretch: 1;
 
     VerticalBox {
-        spacing: 14px; padding-right: 10px;
+        spacing: 14px;
+        padding-right: 10px;
 
+        // ── Machine & Interface Configuration ──
         GroupBox {
-            title: "Machine & Role Configuration";
+            title: "Machine & Interface Configuration";
             VerticalBox {
                 spacing: 10px;
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Device Name:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Device Name:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-name; horizontal-stretch: 1; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Operational Role:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Operational Role:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     ComboBox {
                         model: ["Both (Controller & Controlled Peer)", "Controller only (Send local inputs)", "Peer only (Receive remote inputs)"];
                         current-index: root.setting-role;
@@ -51,106 +58,140 @@ export component SettingsView inherits ScrollView {
                         horizontal-stretch: 1;
                     }
                 }
+
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "Color Theme:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
+                    ComboBox {
+                        model: ["Dark Theme (Recommended)", "Light Theme"];
+                        current-index: Theme.is-dark ? 0 : 1;
+                        selected => {
+                            root.theme-changed(self.current-index);
+                        }
+                        horizontal-stretch: 1;
+                    }
+                }
             }
         }
 
+        // ── Network & Daemon Settings ──
         GroupBox {
-            title: "Network & Daemon Settings";
+            title: "Network & Security";
             VerticalBox {
                 spacing: 10px;
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Listening TCP Port:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Listening TCP Port:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-port; horizontal-stretch: 1; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "mDNS Discovery:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "mDNS Discovery:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.setting-discovery ? "Enabled" : "Disabled"; checked <=> root.setting-discovery; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Clipboard Sharing:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Clipboard Sharing:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.setting-clipboard ? "Enabled" : "Disabled"; checked <=> root.setting-clipboard; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "File Transfer:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "File Transfer:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch {
                         text: root.setting-file-transfer ? "Enabled" : "Disabled";
                         checked <=> root.setting-file-transfer;
                         toggled => { root.toggle-file-transfer(self.checked); }
                     }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "TLS Encryption:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "TLS Encryption:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch {
                         text: root.setting-tls ? "Enabled (Encrypted)" : "Disabled (Unencrypted)";
                         checked <=> root.setting-tls;
                         toggled => { root.toggle-tls(self.checked); }
                     }
                 }
+
                 if !root.setting-tls : Rectangle {
-                    background: #251d10; border-radius: 6px; border-width: 1px; border-color: #d97706;
+                    background: Theme.warning-bg;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.warning-border;
+
                     HorizontalBox {
-                        padding: 10px; spacing: 10px;
-                        Text { text: "💡"; font-size: 16px; vertical-alignment: center; }
+                        padding: 10px;
+                        spacing: 10px;
                         VerticalBox {
                             spacing: 2px;
-                            Text { text: "Security Recommendation"; font-size: 12px; font-weight: 700; color: #fbbf24; }
+                            Text { text: "Security Notice"; font-size: 12px; font-weight: 700; color: Theme.warning-text; }
                             Text {
-                                text: "We recommend enabling TLS Encryption to prevent keystrokes, passwords, and clipboard data from being sniffed by other devices on your local Wi-Fi / LAN.";
-                                font-size: 11px; color: #fde68a; wrap: word-wrap;
+                                text: "Enabling TLS Encryption prevents keystrokes and clipboard data from being inspected by other devices on your local network.";
+                                font-size: 11px;
+                                color: Theme.text-secondary;
+                                wrap: word-wrap;
                             }
                         }
                     }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Autostart on Login:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Autostart on Login:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.setting-autostart ? "Enabled (systemd)" : "Disabled"; checked <=> root.setting-autostart; }
                 }
             }
         }
 
+        // ── Edge Switching & Sensitivity ──
         GroupBox {
-            title: "Edge Switching & Sensitivity Tuning";
+            title: "Edge Switching & Sensitivity";
             VerticalBox {
                 spacing: 10px;
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Flick Velocity (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Flick Velocity (px):"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-velocity; width: 80px; }
-                    Text { text: "(Fast flick speed to jump; 0 = disabled, 20 = recommended)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                    Text { text: "(Fast flick speed to jump; 0 = disabled, 20 = recommended)"; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Dwell Delay (ms):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Dwell Delay (ms):"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-switch-delay; width: 80px; }
-                    Text { text: "(Hold cursor at edge to switch; 0 = flick only, 150 = recommended dwell)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                    Text { text: "(Hold cursor at edge to switch; 0 = flick only, 150 = recommended)"; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Corner Deadzone (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Corner Deadzone (px):"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-deadzone; width: 80px; }
-                    Text { text: "(Protects corners when clicking window controls or menus)"; color: #72748a; font-size: 11px; vertical-alignment: center; }
+                    Text { text: "(Protects corners when clicking window controls or menus)"; color: Theme.text-muted; font-size: 11px; vertical-alignment: center; }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Lock Cursor:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Lock Cursor:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     Switch { text: root.cursor-locked ? "Locked to screen" : "Unlocked"; checked <=> root.cursor-locked; }
                 }
             }
         }
 
+        // ── Global Hotkeys ──
         GroupBox {
-            title: "Global Hotkeys & Emergency Breakout";
+            title: "Global Hardware Hotkeys";
             VerticalBox {
                 spacing: 10px;
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Toggle Cursor Lock:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Toggle Cursor Lock:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     ComboBox {
                         model: ["ScrollLock (Recommended)", "Pause / Break", "Ctrl+Alt+L", "Disabled"];
                         current-index: root.setting-hotkey-lock == "Pause / Break" || root.setting-hotkey-lock == "Pause" ? 1
@@ -164,9 +205,10 @@ export component SettingsView inherits ScrollView {
                         horizontal-stretch: 1;
                     }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Switch Screen (Jump):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Switch Screen (Jump):"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     ComboBox {
                         model: ["Ctrl+Alt+Right (Recommended)", "Ctrl+Alt+Left", "Pause / Break", "F12", "Disabled"];
                         current-index: root.setting-hotkey-switch == "Ctrl+Alt+Left" ? 1
@@ -182,9 +224,10 @@ export component SettingsView inherits ScrollView {
                         horizontal-stretch: 1;
                     }
                 }
+
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Emergency Breakout:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Emergency Breakout:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     ComboBox {
                         model: ["Ctrl+Alt+Escape (Always active)", "Pause / Break", "ScrollLock"];
                         current-index: root.setting-hotkey-escape == "Pause" || root.setting-hotkey-escape == "Pause / Break" ? 1
@@ -196,17 +239,24 @@ export component SettingsView inherits ScrollView {
                         horizontal-stretch: 1;
                     }
                 }
+
                 Rectangle {
-                    background: #1a2238; border-radius: 6px; border-width: 1px; border-color: #3b82f6;
+                    background: Theme.surface-secondary;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+
                     HorizontalBox {
-                        padding: 10px; spacing: 10px;
-                        Text { text: "⌨️"; font-size: 16px; vertical-alignment: center; }
+                        padding: 10px;
+                        spacing: 10px;
                         VerticalBox {
                             spacing: 2px;
-                            Text { text: "Hardware Hotkey Control"; font-size: 12px; font-weight: 700; color: #93c5fd; }
+                            Text { text: "Hardware Hotkey Information"; font-size: 12px; font-weight: 700; color: Theme.accent-indigo; }
                             Text {
-                                text: "Hotkeys operate at the evdev driver level. Use 'Switch Screen' to jump even if a game or full-screen app traps the cursor, and 'Emergency Breakout' to instantly ungrab and restore local control.";
-                                font-size: 11px; color: #bfdbfe; wrap: word-wrap;
+                                text: "Hotkeys intercept at the kernel evdev level. Emergency Breakout instantly ungrabs input and restores local screen focus.";
+                                font-size: 11px;
+                                color: Theme.text-secondary;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -214,30 +264,32 @@ export component SettingsView inherits ScrollView {
             }
         }
 
+        // ── Display Geometry ──
         GroupBox {
-            title: "Display Geometry (Edge Detection Boundaries)";
+            title: "Display Geometry (Edge Boundaries)";
             VerticalBox {
                 spacing: 10px;
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Screen Width (px):"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Screen Width (px):"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-width; horizontal-stretch: 1; }
-                    Text { text: "Height (px):"; width: 80px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Height (px):"; width: 80px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-height; horizontal-stretch: 1; }
                     Button { text: "Auto-Detect"; clicked => { root.auto-detect-screen(); } }
                 }
             }
         }
 
+        // ── Default Peer Connection ──
         GroupBox {
             title: "Default Peer Connection";
             VerticalBox {
                 spacing: 10px;
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Peer IP Address:"; width: 140px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Peer IP Address:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { placeholder-text: "192.168.1.50:24800"; text <=> root.setting-peer-addr; horizontal-stretch: 1; }
-                    Text { text: "Side:"; width: 40px; color: #b4b7d6; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Side:"; width: 40px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     ComboBox {
                         model: ["Right", "Left", "Above", "Below"];
                         current-index: root.setting-peer-pos == "left" ? 1 : (root.setting-peer-pos == "above" ? 2 : (root.setting-peer-pos == "below" ? 3 : 0));
@@ -247,14 +299,13 @@ export component SettingsView inherits ScrollView {
             }
         }
 
+        // ── Footer Actions ──
         HorizontalBox {
             spacing: 12px;
-            if root.settings-feedback != "" : Text {
-                text: root.settings-feedback; color: #4ade80; font-size: 13px; font-weight: 600; vertical-alignment: center;
-            }
             Rectangle { horizontal-stretch: 1; }
             Button {
-                text: "Save & Apply Settings"; primary: true;
+                text: "Save & Apply Settings";
+                primary: true;
                 clicked => { root.save-settings(); }
             }
         }

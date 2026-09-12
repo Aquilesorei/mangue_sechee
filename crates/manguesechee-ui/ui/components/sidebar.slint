@@ -1,4 +1,5 @@
 import { VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
 
 export component Sidebar inherits Rectangle {
     in-out property <int> active-tab: 0;
@@ -8,104 +9,283 @@ export component Sidebar inherits Rectangle {
     in property <bool> is-service-running: true;
 
     callback refresh-logs();
+    callback toggle-theme();
 
-    width: 200px;
-    background: #181926;
+    width: 210px;
+    background: Theme.sidebar-bg;
+    border-width: 0px;
+
+    // Subtle divider line to right
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: 100%;
+        background: Theme.sidebar-border;
+    }
 
     VerticalBox {
-        padding: 16px; spacing: 8px;
+        padding: 16px;
+        spacing: 6px;
 
-        // Brand
+        // Brand & Application Title
         HorizontalBox {
-            spacing: 10px; padding-bottom: 12px;
+            spacing: 10px;
+            padding-bottom: 12px;
+            alignment: start;
             Image {
                 source: @image-url("../../../../assets/icons/manguesechee-48.png");
-                width: 28px; height: 28px;
+                width: 28px;
+                height: 28px;
             }
-            Text {
-                text: "Manguesechee"; font-size: 17px; font-weight: 700; color: #e0e0ff;
-                vertical-alignment: center;
+            VerticalLayout {
+                spacing: 1px;
+                alignment: center;
+                Text {
+                    text: "Manguesechee";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Input Sharing";
+                    font-size: 11px;
+                    font-weight: 500;
+                    color: Theme.primary;
+                }
             }
         }
 
-        // Nav Items
+        // ── Navigation Items (No emojis, active pill bar, high legibility) ──
+
+        // Tab 0: Peers
         Rectangle {
-            height: 38px; border-radius: 6px;
-            background: root.active-tab == 0 ? #2b2d42 : transparent;
-            HorizontalBox {
-                padding-left: 12px; padding-right: 12px;
-                Text { text: "🖥️  Peers"; font-size: 14px; font-weight: 600; color: root.active-tab == 0 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            height: 38px;
+            border-radius: 6px;
+            background: root.active-tab == 0 ? Theme.surface-active : (tab0-touch.has-hover ? Theme.surface-hover : transparent);
+
+            if root.active-tab == 0 : Rectangle {
+                x: 0px;
+                width: 3px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1.5px;
+                background: Theme.primary;
             }
-            TouchArea { clicked => { root.active-tab = 0; } }
+
+            HorizontalBox {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: "Peers";
+                    font-size: 13px;
+                    font-weight: root.active-tab == 0 ? 600 : 500;
+                    color: root.active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            tab0-touch := TouchArea { clicked => { root.active-tab = 0; } }
         }
 
+        // Tab 1: Topology
         Rectangle {
-            height: 38px; border-radius: 6px;
-            background: root.active-tab == 1 ? #2b2d42 : transparent;
-            HorizontalBox {
-                padding-left: 12px; padding-right: 12px;
-                Text { text: "📐  Topology"; font-size: 14px; font-weight: 600; color: root.active-tab == 1 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            height: 38px;
+            border-radius: 6px;
+            background: root.active-tab == 1 ? Theme.surface-active : (tab1-touch.has-hover ? Theme.surface-hover : transparent);
+
+            if root.active-tab == 1 : Rectangle {
+                x: 0px;
+                width: 3px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1.5px;
+                background: Theme.primary;
             }
-            TouchArea { clicked => { root.active-tab = 1; } }
+
+            HorizontalBox {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: "Screen Topology";
+                    font-size: 13px;
+                    font-weight: root.active-tab == 1 ? 600 : 500;
+                    color: root.active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            tab1-touch := TouchArea { clicked => { root.active-tab = 1; } }
         }
 
+        // Tab 4: Files
         Rectangle {
-            height: 38px; border-radius: 6px;
-            background: root.active-tab == 4 ? #2b2d42 : transparent;
-            HorizontalBox {
-                padding-left: 12px; padding-right: 12px;
-                Text { text: "📁  Files"; font-size: 14px; font-weight: 600; color: root.active-tab == 4 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            height: 38px;
+            border-radius: 6px;
+            background: root.active-tab == 4 ? Theme.surface-active : (tab4-touch.has-hover ? Theme.surface-hover : transparent);
+
+            if root.active-tab == 4 : Rectangle {
+                x: 0px;
+                width: 3px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1.5px;
+                background: Theme.primary;
             }
-            TouchArea { clicked => { root.active-tab = 4; } }
+
+            HorizontalBox {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: "File Transfers";
+                    font-size: 13px;
+                    font-weight: root.active-tab == 4 ? 600 : 500;
+                    color: root.active-tab == 4 ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            tab4-touch := TouchArea { clicked => { root.active-tab = 4; } }
         }
 
+        // Tab 2: Settings
         Rectangle {
-            height: 38px; border-radius: 6px;
-            background: root.active-tab == 2 ? #2b2d42 : transparent;
-            HorizontalBox {
-                padding-left: 12px; padding-right: 12px;
-                Text { text: "⚙️  Settings"; font-size: 14px; font-weight: 600; color: root.active-tab == 2 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            height: 38px;
+            border-radius: 6px;
+            background: root.active-tab == 2 ? Theme.surface-active : (tab2-touch.has-hover ? Theme.surface-hover : transparent);
+
+            if root.active-tab == 2 : Rectangle {
+                x: 0px;
+                width: 3px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1.5px;
+                background: Theme.primary;
             }
-            TouchArea { clicked => { root.active-tab = 2; } }
+
+            HorizontalBox {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: "Settings";
+                    font-size: 13px;
+                    font-weight: root.active-tab == 2 ? 600 : 500;
+                    color: root.active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            tab2-touch := TouchArea { clicked => { root.active-tab = 2; } }
         }
 
+        // Tab 3: Logs
         Rectangle {
-            height: 38px; border-radius: 6px;
-            background: root.active-tab == 3 ? #2b2d42 : transparent;
-            HorizontalBox {
-                padding-left: 12px; padding-right: 12px;
-                Text { text: "📜  Logs"; font-size: 14px; font-weight: 600; color: root.active-tab == 3 ? #ffffff : #9a9cb6; vertical-alignment: center; }
+            height: 38px;
+            border-radius: 6px;
+            background: root.active-tab == 3 ? Theme.surface-active : (tab3-touch.has-hover ? Theme.surface-hover : transparent);
+
+            if root.active-tab == 3 : Rectangle {
+                x: 0px;
+                width: 3px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1.5px;
+                background: Theme.primary;
             }
-            TouchArea { clicked => { root.active-tab = 3; root.refresh-logs(); } }
+
+            HorizontalBox {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: "Logs & Debug";
+                    font-size: 13px;
+                    font-weight: root.active-tab == 3 ? 600 : 500;
+                    color: root.active-tab == 3 ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+            tab3-touch := TouchArea { clicked => { root.active-tab = 3; root.refresh-logs(); } }
         }
 
         Rectangle { vertical-stretch: 1; }
 
-        // Sidebar Footer: Local Identity, IP & Daemon Pill
+        // Theme Switcher Card
         Rectangle {
-            background: #11121c; border-radius: 8px; height: 74px;
+            background: Theme.surface-card;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            height: 36px;
+
+            HorizontalBox {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: center;
+
+                Text {
+                    text: Theme.is-dark ? "Theme: Dark" : "Theme: Light";
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    width: 52px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: Theme.surface-inset;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+
+                    Text {
+                        text: Theme.is-dark ? "Dark" : "Light";
+                        font-size: 10px;
+                        font-weight: 600;
+                        color: Theme.primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            TouchArea {
+                clicked => { root.toggle-theme(); }
+            }
+        }
+
+        // Sidebar Footer: Local Identity & Daemon status
+        Rectangle {
+            background: Theme.surface-card;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border-subtle;
+            height: 74px;
+
             VerticalBox {
-                padding: 8px; spacing: 3px;
+                padding: 8px;
+                spacing: 3px;
+
                 HorizontalBox {
-                    Text { text: "Device:"; font-size: 11px; color: #72748a; }
+                    Text { text: "Device:"; font-size: 11px; color: Theme.text-muted; }
                     Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.local-name; font-size: 12px; font-weight: 600; color: #e0e0ff; overflow: elide; }
+                    Text { text: root.local-name; font-size: 12px; font-weight: 600; color: Theme.text-primary; overflow: elide; }
                 }
                 HorizontalBox {
-                    Text { text: "LAN IP:"; font-size: 11px; color: #72748a; }
+                    Text { text: "LAN IP:"; font-size: 11px; color: Theme.text-muted; }
                     Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: #818cf8; overflow: elide; }
+                    Text { text: root.local-ip + ":" + root.setting-port; font-size: 11px; font-weight: 600; color: Theme.accent-indigo; overflow: elide; }
                 }
                 HorizontalBox {
                     spacing: 6px;
                     Rectangle {
-                        width: 8px; height: 8px; border-radius: 4px;
-                        background: root.is-service-running ? #38ef7d : #ef4444;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.is-service-running ? Theme.success : Theme.error;
                         y: (parent.height - self.height) / 2;
                     }
                     Text {
                         text: root.is-service-running ? "Daemon: Running" : "Daemon: Stopped";
-                        font-size: 11px; color: root.is-service-running ? #38ef7d : #f87171;
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: root.is-service-running ? Theme.success : Theme.error;
                     }
                 }
             }

@@ -1,24 +1,27 @@
 import { HorizontalBox, VerticalBox } from "std-widgets.slint";
 import { PeerEntry, TransferItem, HistoryItem, AppView } from "types.slint";
+import { Theme } from "theme.slint";
 import { SetupWizard, ConnectingView } from "views/wizard.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { HeaderBar } from "components/header.slint";
+import { Snackbar } from "components/snackbar.slint";
+import { ManualConnectModal, ConfirmModal, PairingPinModal } from "components/dialogs.slint";
 import { PeersView } from "views/peers.slint";
 import { TopologyView } from "views/topology.slint";
 import { TransfersView } from "views/transfers.slint";
 import { SettingsView } from "views/settings.slint";
 import { LogsView } from "views/logs.slint";
 
-export { PeerEntry, TransferItem, HistoryItem, AppView }
+export { PeerEntry, TransferItem, HistoryItem, AppView, Theme }
 
 export component MainWindow inherits Window {
     title: "Manguesechee";
     icon:  @image-url("../../../assets/icons/manguesechee-256.png");
-    min-width:  860px;
+    min-width:  880px;
     min-height: 600px;
-    preferred-width: 900px;
-    preferred-height: 640px;
-    background: #11121c;
+    preferred-width: 960px;
+    preferred-height: 660px;
+    background: Theme.app-bg;
 
     // ── Application State ───────────────────────────────────────────────────
     in-out property <AppView>     view:               AppView.Main;
@@ -39,7 +42,21 @@ export component MainWindow inherits Window {
     in-out property <string>      connection-error:   "";
     in-out property <bool>        topology-configured: false;
     in-out property <string>      topology-notice:     "";
+    in-out property <bool>        is-dark <=> Theme.is-dark;
     callback dismiss-error();
+
+    // ── Toast & Snackbar Properties ─────────────────────────────────────────
+    in-out property <bool>        toast-visible:  false;
+    in-out property <string>      toast-text:     "";
+    in-out property <bool>        toast-is-error: false;
+    callback dismiss-toast();
+
+    // ── Modal Properties ────────────────────────────────────────────────────
+    in-out property <int>         active-modal:      0; // 0=None, 1=ManualConnect, 2=ConfirmUnpair, 3=PairingPin
+    in-out property <string>      modal-target-addr: "";
+    in-out property <string>      modal-title:       "";
+    in-out property <string>      modal-message:     "";
+    in-out property <string>      modal-pin-code:    "482 915";
 
     // ── Wizard Properties ───────────────────────────────────────────────────
     in-out property <int>         wizard-role:  0;
@@ -81,6 +98,8 @@ export component MainWindow inherits Window {
     callback toggle-file-transfer(bool);
     callback toggle-tls(bool);
     callback toggle-cursor-lock();
+    callback toggle-theme();
+    callback theme-changed(int);
     callback ping-peer(string);
     callback forget-peer(string);
     callback update-peer-position(string, string);
@@ -98,6 +117,13 @@ export component MainWindow inherits Window {
     callback restart-service();
     callback hide-to-tray();
     callback wizard-finish(int, string, string);
+
+    // Modal actions
+    callback open-connect-modal();
+    callback open-unpair-modal(string);
+    callback close-modal();
+    callback modal-connect-submitted(string, string);
+    callback modal-confirm-submitted();
 
     // ═════════════════════════════════════════════════════════════════════════
     // 1. SETUP WIZARD (First Launch)
@@ -134,17 +160,18 @@ export component MainWindow inherits Window {
             setting-port: root.setting-port;
             is-service-running: root.is-service-running;
             refresh-logs => { root.refresh-logs(); }
+            toggle-theme => { root.toggle-theme(); }
         }
 
         // ── Main Content Body ───────────────────────────────────────────────
         Rectangle {
             horizontal-stretch: 1;
-            background: #11121c;
+            background: Theme.app-bg;
 
             VerticalBox {
                 padding: 18px; spacing: 14px;
 
-                // Header status bar with Live Service Controls
+                // Header status bar with Live Controls
                 HeaderBar {
                     active-tab: root.active-tab;
                     status: root.status;
@@ -175,6 +202,8 @@ export component MainWindow inherits Window {
                     peers: root.peers;
                     configure-topology-clicked => { root.active-tab = 1; }
                     dismiss-error => { root.dismiss-error(); }
+                    open-connect-modal => { root.open-connect-modal(); }
+                    open-unpair-modal(addr) => { root.open-unpair-modal(addr); }
                     connect-requested(addr) => { root.connect-requested(addr); }
                     disconnect-requested => { root.disconnect-requested(); }
                     ping-peer(addr) => { root.ping-peer(addr); }
@@ -231,6 +260,7 @@ export component MainWindow inherits Window {
                     toggle-tls(enabled) => { root.toggle-tls(enabled); }
                     auto-detect-screen => { root.auto-detect-screen(); }
                     save-settings => { root.save-settings(); }
+                    theme-changed(idx) => { root.theme-changed(idx); }
                 }
 
                 // TAB 3: LOGS CONSOLE
@@ -247,5 +277,39 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // 4. MODAL DIALOGS OVERLAY (Scrim + Centered Dialog)
+    // ═════════════════════════════════════════════════════════════════════════
+    if root.active-modal == 1 : ManualConnectModal {
+        cancel => { root.close-modal(); }
+        connect(addr, side) => { root.modal-connect-submitted(addr, side); }
+    }
+
+    if root.active-modal == 2 : ConfirmModal {
+        title: root.modal-title != "" ? root.modal-title : "Unpair Machine";
+        message: root.modal-message != "" ? root.modal-message : "Are you sure you want to unpair this machine?";
+        confirm-text: "Unpair";
+        is-destructive: true;
+        cancel => { root.close-modal(); }
+        confirm => { root.modal-confirm-submitted(); }
+    }
+
+    if root.active-modal == 3 : PairingPinModal {
+        peer-name: root.modal-title != "" ? root.modal-title : "Peer";
+        pin-code: root.modal-pin-code;
+        cancel => { root.close-modal(); }
+        confirm => { root.modal-confirm-submitted(); }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // 5. FLOATING SNACKBAR / TOAST NOTIFICATION
+    // ═════════════════════════════════════════════════════════════════════════
+    Snackbar {
+        show: root.toast-visible;
+        message: root.toast-text;
+        is-error: root.toast-is-error;
+        dismiss => { root.dismiss-toast(); }
     }
 }

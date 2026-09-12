@@ -1,0 +1,71 @@
+// Manguesechee Design System - Unified Theme Tokens
+// Based on frontend-design principles: intentional warm amber/mango palette,
+// crisp slate neutrals, architectural darks, and high-legibility lights.
+
+export global Theme {
+    in-out property <bool> is-dark: true;
+
+    // ── Application Shell & Surfaces ─────────────────────────────────────────
+    out property <color> app-bg:            is-dark ? #0f111a : #f8fafc;
+    out property <color> sidebar-bg:        is-dark ? #141724 : #f1f5f9;
+    out property <color> sidebar-border:    is-dark ? #1e2235 : #e2e8f0;
+    out property <color> surface-card:      is-dark ? #1a1e2e : #ffffff;
+    out property <color> surface-secondary: is-dark ? #121522 : #f8fafc;
+    out property <color> surface-hover:     is-dark ? #22273d : #f1f5f9;
+    out property <color> surface-active:    is-dark ? #2a314d : #e2e8f0;
+    out property <color> surface-inset:     is-dark ? #0b0d14 : #edf2f7;
+
+    // ── Borders ──────────────────────────────────────────────────────────────
+    out property <color> border-subtle:     is-dark ? #252a3f : #e2e8f0;
+    out property <color> border-strong:     is-dark ? #353c5a : #cbd5e1;
+    out property <color> border-focus:      is-dark ? #f59e0b : #d97706;
+
+    // ── Typography & Text ────────────────────────────────────────────────────
+    out property <color> text-primary:      is-dark ? #f8fafc : #0f172a;
+    out property <color> text-secondary:    is-dark ? #94a3b8 : #475569;
+    out property <color> text-muted:        is-dark ? #64748b : #94a3b8;
+    out property <color> text-on-accent:    is-dark ? #0f172a : #ffffff;
+
+    // ── Brand Accent: Dried Mango & Warm Amber ───────────────────────────────
+    out property <color> primary:           is-dark ? #f59e0b : #d97706;
+    out property <color> primary-hover:     is-dark ? #fbbf24 : #b45309;
+    out property <color> primary-subtle:    is-dark ? #3b2308 : #fef3c7;
+    out property <color> primary-border:    is-dark ? #78350f : #fcd34d;
+    out property <color> primary-text:      is-dark ? #fde68a : #92400e;
+
+    // ── Secondary Accent: Precision Indigo ───────────────────────────────────
+    out property <color> accent-indigo:     is-dark ? #6366f1 : #4f46e5;
+    out property <color> accent-subtle:     is-dark ? #1e1b4b : #e0e7ff;
+    out property <color> accent-text:       is-dark ? #a5b4fc : #3730a3;
+
+    // ── Semantic Feedback ────────────────────────────────────────────────────
+    out property <color> success:           is-dark ? #10b981 : #059669;
+    out property <color> success-bg:        is-dark ? #062e22 : #ecfdf5;
+    out property <color> success-border:    is-dark ? #047857 : #a7f3d0;
+    out property <color> success-text:      is-dark ? #6ee7b7 : #065f46;
+
+    out property <color> warning:           is-dark ? #f59e0b : #d97706;
+    out property <color> warning-bg:        is-dark ? #331e05 : #fffbeb;
+    out property <color> warning-border:    is-dark ? #92400e : #fde68a;
+    out property <color> warning-text:      is-dark ? #fcd34d : #92400e;
+
+    out property <color> error:             is-dark ? #ef4444 : #dc2626;
+    out property <color> error-bg:          is-dark ? #381014 : #fef2f2;
+    out property <color> error-border:      is-dark ? #991b1b : #fecaca;
+    out property <color> error-text:        is-dark ? #fca5a5 : #991b1b;
+
+    // ── Scrim & Modals ───────────────────────────────────────────────────────
+    out property <color> scrim:             is-dark ? #000000a6 : #0f172a66;
+    out property <color> modal-bg:          is-dark ? #171a27 : #ffffff;
+    out property <color> modal-border:      is-dark ? #2e354e : #e2e8f0;
+
+    // ── Workstation Monitor Bezel & Desk Styling ─────────────────────────────
+    out property <color> desk-canvas:       is-dark ? #0c0e15 : #f1f5f9;
+    out property <color> desk-grid-line:    is-dark ? #171b29 : #e2e8f0;
+    out property <color> monitor-bezel:     is-dark ? #202538 : #334155;
+    out property <color> monitor-bezel-hi:  is-dark ? #323955 : #475569;
+    out property <color> monitor-screen:    is-dark ? #111420 : #1e293b;
+    out property <color> monitor-stand:     is-dark ? #282e44 : #475569;
+    out property <color> slot-empty-bg:     is-dark ? #141724 : #ffffff;
+    out property <color> slot-empty-border: is-dark ? #262c42 : #cbd5e1;
+}
