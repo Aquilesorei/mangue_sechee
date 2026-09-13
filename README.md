@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/dried-mango.png" alt="Manguesechee" width="180" />
+</p>
+
 # Manguesechee
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
