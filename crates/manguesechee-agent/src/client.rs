@@ -624,19 +624,9 @@ async fn sync_clipboard_on_entry(
                     let cfg_clip = manguesechee_core::config::load()
                         .map(|c| c.clipboard)
                         .unwrap_or_default();
-                    let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
                     let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
 
-                    if total_size <= fast_limit {
-                        let tid = uuid::Uuid::new_v4().to_string();
-                        if let Err(e) = crate::file_transfer::send_fast_transfer(
-                            tid, files, disk_paths, total_size, sender, ipc_state,
-                        )
-                        .await
-                        {
-                            warn!("failed to send fast file transfer on screen entry: {e}");
-                        }
-                    } else if total_size <= bg_limit {
+                    if total_size <= bg_limit {
                         crate::file_transfer::spawn_background_sender(
                             addr.to_string(),
                             files,
@@ -694,7 +684,7 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
     let mut edge = EdgeDetector::new(ctx.screen_width, ctx.screen_height)
         .with_settings(ctx.deadzone_px, ctx.delay_ms, initial_locked, ctx.velocity_threshold);
     let mut missed_pings: u32 = 0;
-    let mut ping_interval = tokio::time::interval(Duration::from_secs(2));
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(3));
     ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let hotkey_cfg = manguesechee_core::config::load()
@@ -978,15 +968,15 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
             }
 
             _ = ping_interval.tick() => {
-                if missed_pings >= 2 {
-                    warn!("peer {} missed 2 consecutive heartbeats — connection dead, ungrabbing and disconnecting", ctx.addr);
+                if missed_pings >= 4 {
+                    warn!("peer {} missed 4 consecutive heartbeats — connection dead, ungrabbing and disconnecting", ctx.addr);
                     let _ = ctx.grab_mouse_tx.send(false);
                     let _ = ctx.grab_keyboard_tx.send(false);
                     break;
                 }
                 missed_pings += 1;
                 let ping_res = tokio::time::timeout(
-                    Duration::from_millis(800),
+                    Duration::from_secs(3),
                     ctx.sender.send(&Message::Ping),
                 ).await;
                 match ping_res {
@@ -998,10 +988,7 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
                         break;
                     }
                     Err(_) => {
-                        warn!("heartbeat ping to {} timed out — ungrabbing and disconnecting", ctx.addr);
-                        let _ = ctx.grab_mouse_tx.send(false);
-                        let _ = ctx.grab_keyboard_tx.send(false);
-                        break;
+                        warn!("heartbeat ping send to {} timed out (missed_pings={missed_pings})", ctx.addr);
                     }
                 }
             }
@@ -1019,15 +1006,9 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
                             if let Some(paths) = crate::file_clipboard::parse_clipboard_file_uris(&text) {
                                 let (files, disk_paths, total_size) = crate::file_clipboard::collect_file_entries(&paths);
                                 let cfg_clip = manguesechee_core::config::load().map(|c| c.clipboard).unwrap_or_default();
-                                let fast_limit = (cfg_clip.fast_limit_mb as u64) * 1024 * 1024;
                                 let bg_limit = (cfg_clip.background_limit_mb as u64) * 1024 * 1024;
 
-                                if total_size <= fast_limit {
-                                    let tid = uuid::Uuid::new_v4().to_string();
-                                    if let Err(e) = crate::file_transfer::send_fast_transfer(tid, files, disk_paths, total_size, ctx.sender, ctx.ipc_state).await {
-                                        warn!("failed to send fast file transfer: {e}");
-                                    }
-                                } else if total_size <= bg_limit {
+                                if total_size <= bg_limit {
                                     crate::file_transfer::spawn_background_sender(ctx.addr.to_string(), files, disk_paths, total_size, Arc::clone(ctx.ipc_state));
                                 } else {
                                     let size_str = crate::file_clipboard::format_bytes(total_size);

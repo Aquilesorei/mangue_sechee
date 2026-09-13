@@ -102,7 +102,7 @@ async fn negotiate_tls_and_identity(
     local_id: &str,
     local_display_name: &str,
     ipc_state: &crate::ipc_server::SharedState,
-) -> anyhow::Result<(TcpTransport, Option<PeerIdentity>)> {
+) -> anyhow::Result<Option<(TcpTransport, PeerIdentity)>> {
     let first_msg = transport.receive().await?;
     let (peer_name, peer_id, peer_display_name) = match first_msg {
         Message::StartTls { requested } => {
@@ -138,7 +138,7 @@ async fn negotiate_tls_and_identity(
                         Arc::clone(ipc_state),
                     )
                     .await?;
-                    return Ok((wrap(tokio::net::TcpStream::connect("127.0.0.1:1").await.unwrap_or_else(|_| panic!("unreachable"))), None));
+                    return Ok(None);
                 }
                 Message::Identity {
                     name,
@@ -166,7 +166,7 @@ async fn negotiate_tls_and_identity(
                 Arc::clone(ipc_state),
             )
             .await?;
-            return Ok((wrap(tokio::net::TcpStream::connect("127.0.0.1:1").await.unwrap_or_else(|_| panic!("unreachable"))), None));
+            return Ok(None);
         }
         Message::Identity {
             name,
@@ -192,14 +192,14 @@ async fn negotiate_tls_and_identity(
         })
         .await?;
 
-    Ok((
+    Ok(Some((
         transport,
-        Some(PeerIdentity {
+        PeerIdentity {
             name: peer_name,
             id: peer_id,
             display_name: peer_display_name,
-        }),
-    ))
+        },
+    )))
 }
 
 
@@ -684,7 +684,7 @@ async fn handle(
     broadcast_tx: tokio::sync::broadcast::Sender<Message>,
 ) -> anyhow::Result<()> {
     let transport = wrap(stream);
-    let (mut transport, maybe_peer) = negotiate_tls_and_identity(
+    let Some((mut transport, peer)) = negotiate_tls_and_identity(
         transport,
         peer_addr,
         &local_name,
@@ -692,9 +692,7 @@ async fn handle(
         &local_display_name,
         &ipc_state,
     )
-    .await?;
-
-    let Some(peer) = maybe_peer else {
+    .await? else {
         return Ok(());
     };
 
