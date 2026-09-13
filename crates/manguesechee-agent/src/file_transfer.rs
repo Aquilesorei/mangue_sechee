@@ -110,7 +110,31 @@ impl ActiveReceiver {
             }
         }
         let first_name = self.files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "file".into());
-        Ok((self.disk_paths, self.is_background, first_name, self.total_size))
+
+        let mut top_level_paths = Vec::new();
+        for file in &self.files {
+            let top_item = if let Some(ref rel) = file.relative_path {
+                let p = std::path::Path::new(rel);
+                if let Some(std::path::Component::Normal(first)) = p.components().next() {
+                    self._staging_dir.join(first)
+                } else {
+                    self._staging_dir.join(&file.filename)
+                }
+            } else {
+                self._staging_dir.join(sanitize_relative_path(&file.filename))
+            };
+            if !top_level_paths.contains(&top_item) {
+                top_level_paths.push(top_item);
+            }
+        }
+
+        let return_paths = if top_level_paths.is_empty() {
+            self.disk_paths
+        } else {
+            top_level_paths
+        };
+
+        Ok((return_paths, self.is_background, first_name, self.total_size))
     }
 }
 

@@ -644,6 +644,15 @@ async fn sync_clipboard_on_entry(
                             total_size,
                             Arc::clone(ipc_state),
                         );
+                    } else {
+                        let size_str = crate::file_clipboard::format_bytes(total_size);
+                        let limit_str = crate::file_clipboard::format_bytes(bg_limit);
+                        warn!("transfer size {size_str} exceeds limit {limit_str} — falling back to plain text path");
+                        crate::file_clipboard::show_notification(
+                            "Manguesechee",
+                            &format!("⚠️ Transfert ignoré : {size_str} dépasse la limite autorisée ({limit_str})"),
+                        );
+                        let _ = sender.send(&Message::ClipboardSync { text }).await;
                     }
                 } else {
                     info!("→ syncing clipboard on screen entry ({} bytes)", text.len());
@@ -1020,6 +1029,20 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
                                     }
                                 } else if total_size <= bg_limit {
                                     crate::file_transfer::spawn_background_sender(ctx.addr.to_string(), files, disk_paths, total_size, Arc::clone(ctx.ipc_state));
+                                } else {
+                                    let size_str = crate::file_clipboard::format_bytes(total_size);
+                                    let limit_str = crate::file_clipboard::format_bytes(bg_limit);
+                                    warn!("transfer size {size_str} exceeds limit {limit_str} — falling back to plain text path");
+                                    crate::file_clipboard::show_notification(
+                                        "Manguesechee",
+                                        &format!("⚠️ Transfert ignoré : {size_str} dépasse la limite autorisée ({limit_str})"),
+                                    );
+                                    if let Err(e) = ctx.sender.send(&Message::ClipboardSync { text }).await {
+                                        warn!("failed to send clipboard sync: {e}");
+                                        let _ = ctx.grab_mouse_tx.send(false);
+                                        let _ = ctx.grab_keyboard_tx.send(false);
+                                        break;
+                                    }
                                 }
                             } else {
                                 if let Err(e) = ctx.sender.send(&Message::ClipboardSync { text }).await {
