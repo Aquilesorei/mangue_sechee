@@ -318,6 +318,7 @@ async fn handle(
     });
 
     let mut file_receiver = crate::file_transfer::FileReceiver::default();
+    let mut ctrl_held = false;
 
     // Closure to process any message
     let handle_msg = |msg: Message,
@@ -325,6 +326,7 @@ async fn handle(
                           mouse: &mut MouseInjector,
                           keyboard: &mut KeyboardInjector,
                           has_control: &mut bool,
+                          ctrl_held: &mut bool,
                           file_receiver: &mut crate::file_transfer::FileReceiver,
                           out_tx: &tokio::sync::mpsc::Sender<Message>| -> anyhow::Result<bool> {
         match msg {
@@ -333,11 +335,13 @@ async fn handle(
                 edge.set_allowed_edge(None);
                 edge.place_at_entry_ratio(&return_edge, ratio);
                 *has_control = true;
+                *ctrl_held = false;
                 info!("cursor entered from {return_edge:?} (controller exited {entry:?}, ratio={ratio:?}) — multi-directional navigation enabled");
             }
 
             Message::ReturnControl { edge, ratio: _ } => {
                 *has_control = false;
+                *ctrl_held = false;
                 let _ = mouse.release_all();
                 let _ = keyboard.release_all();
                 info!("controller reclaimed control via ReturnControl ({edge:?}) — released all virtual keys & mouse buttons");
@@ -352,6 +356,7 @@ async fn handle(
                 if let InputEvent::MouseMove { dx, dy } = &event {
                     if let Some(exit) = edge.update(*dx, *dy) {
                         *has_control = false;
+                        *ctrl_held = false;
                         let ratio = edge.current_ratio(exit);
                         info!("cursor left via {exit:?} (ratio={ratio:.2}) — ReturnControl");
                         let _ = mouse.release_all();
@@ -367,6 +372,13 @@ async fn handle(
                         }
                         let _ = out_tx.try_send(Message::ReturnControl { edge: exit, ratio: Some(ratio) });
                         return Ok(true);
+                    }
+                }
+                if let InputEvent::Key { key, pressed } = &event {
+                    if key.is_ctrl() {
+                        *ctrl_held = *pressed;
+                    } else if *pressed && *key == manguesechee_core::events::KeyCode::KEY_V && *ctrl_held {
+                        crate::file_transfer::notify_premature_paste_if_transferring(&ipc_state);
                     }
                 }
                 match &event {
@@ -472,7 +484,7 @@ async fn handle(
 
     // Process initial message if captured during pairing resolution
     if let Some(msg) = initial_msg {
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut ctrl_held, &mut file_receiver, &out_tx)? {
             return Ok(());
         }
     }
@@ -504,7 +516,7 @@ async fn handle(
                 }
             }
         };
-        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut file_receiver, &out_tx)? {
+        if !handle_msg(msg, &mut edge, &mut mouse, &mut keyboard, &mut has_control, &mut ctrl_held, &mut file_receiver, &out_tx)? {
             break;
         }
     }

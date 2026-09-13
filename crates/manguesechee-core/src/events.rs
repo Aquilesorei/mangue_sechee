@@ -57,6 +57,8 @@ impl KeyCode {
     pub const KEY_F10: KeyCode = KeyCode(68);
     pub const KEY_F11: KeyCode = KeyCode(87);
     pub const KEY_F12: KeyCode = KeyCode(88);
+    pub const KEY_C: KeyCode = KeyCode(46);
+    pub const KEY_V: KeyCode = KeyCode(47);
 
     pub fn is_ctrl(&self) -> bool {
         *self == Self::KEY_LEFTCTRL || *self == Self::KEY_RIGHTCTRL

@@ -1,7 +1,7 @@
 //! Outbound connection — controller side.
 //! Phases 1-7: identity, pairing, edge switching, clipboard sync.
 
-use manguesechee_core::events::InputEvent;
+use manguesechee_core::events::{InputEvent, KeyCode};
 use manguesechee_core::protocol::{Edge, Message};
 use manguesechee_core::topology::GridTopology;
 use manguesechee_input::{
@@ -332,6 +332,7 @@ pub async fn connect_to(
     // ── Clipboard watcher ─────────────────────────────────────────────────────
     // Outgoing clipboard messages share the main sender via a dedicated channel.
     let (clip_msg_tx, mut clip_msg_rx) = mpsc::channel::<Message>(16);
+    let clip_tx_for_keys = clip_msg_tx.clone();
     let clipboard_enabled = manguesechee_core::config::load()
         .map(|c| c.clipboard.enabled)
         .unwrap_or(true);
@@ -587,6 +588,21 @@ pub async fn connect_to(
 
                 // Hotkey and breakout handling
                 if let InputEvent::Key { key, pressed } = &event {
+                    if *pressed && *key == KeyCode::KEY_V && hotkey_matcher.ctrl_held() {
+                        crate::file_transfer::notify_premature_paste_if_transferring(&ipc_state);
+                    }
+                    if *pressed && *key == KeyCode::KEY_C && hotkey_matcher.ctrl_held() {
+                        let tx = clip_tx_for_keys.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                            if let Some(text) = crate::clipboard::get_text() {
+                                if !text.is_empty() && !crate::clipboard::is_already_synced(&text) {
+                                    crate::clipboard::mark_synced(&text);
+                                    let _ = tx.send(Message::ClipboardSync { text }).await;
+                                }
+                            }
+                        });
+                    }
                     if let Some(action) = hotkey_matcher.process_key(*key, *pressed) {
                         match action {
                             HotkeyAction::ToggleCursorLock => {

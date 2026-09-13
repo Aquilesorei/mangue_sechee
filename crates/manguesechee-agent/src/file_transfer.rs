@@ -138,18 +138,25 @@ impl FileReceiver {
         let fname = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
         info!("receiving file transfer '{fname}' ({} bytes, background={is_background})", total_size);
 
-        match ActiveReceiver::new(transfer_id.clone(), files, total_size, is_background) {
+        match ActiveReceiver::new(transfer_id.clone(), files.clone(), total_size, is_background) {
             Ok(receiver) => {
                 self.active.insert(transfer_id.clone(), receiver);
                 let mut s = ipc_state.lock().unwrap();
                 s.active_transfers.retain(|t| t.transfer_id != transfer_id);
                 s.active_transfers.push(FileTransferInfo {
                     transfer_id,
-                    filename: fname,
+                    filename: fname.clone(),
                     bytes_transferred: 0,
                     total_bytes: total_size,
                     is_receiving: true,
                 });
+                let size_str = file_clipboard::format_bytes(total_size);
+                let notif = if files.len() == 1 {
+                    format!("📥 Réception de '{fname}' ({size_str})…")
+                } else {
+                    format!("📥 Réception de {} fichiers ({size_str})…", files.len())
+                };
+                file_clipboard::show_notification("Manguesechee", &notif);
             }
             Err(e) => warn!("failed to initialize file receiver: {e}"),
         }
@@ -182,19 +189,19 @@ impl FileReceiver {
     ) {
         if let Some(rec) = self.active.remove(transfer_id) {
             match rec.finish() {
-                Ok((staged_paths, is_bg, first_name, total_bytes)) => {
+                Ok((staged_paths, _is_bg, first_name, total_bytes)) => {
                     info!("file transfer complete: {} files staged", staged_paths.len());
                     if let Err(e) = file_clipboard::set_file_clipboard(&staged_paths) {
                         warn!("failed to set staged files in clipboard: {e}");
                     }
 
-                    if is_bg {
-                        let size_str = file_clipboard::format_bytes(total_bytes);
-                        file_clipboard::show_notification(
-                            "Manguesechee",
-                            &format!("File ready to paste: {first_name} ({size_str})"),
-                        );
-                    }
+                    let count = staged_paths.len();
+                    let notif = if count == 1 {
+                        format!("✅ '{first_name}' prêt à être collé ! (Ctrl+V)")
+                    } else {
+                        format!("✅ {count} fichiers prêts à être collés ! (Ctrl+V)")
+                    };
+                    file_clipboard::show_notification("Manguesechee", &notif);
 
                     let mut s = ipc_state.lock().unwrap();
                     s.active_transfers.retain(|t| t.transfer_id != transfer_id);
@@ -214,6 +221,34 @@ impl FileReceiver {
     }
 }
 
+static LAST_PREMATURE_NOTIF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Checks if any file transfer is currently being received.
+/// If so, shows a desktop notification informing the user of the progress percentage.
+/// Rate-limited to once every 2 seconds.
+pub fn notify_premature_paste_if_transferring(ipc_state: &SharedState) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let last = LAST_PREMATURE_NOTIF.load(std::sync::atomic::Ordering::Relaxed);
+    if now.saturating_sub(last) < 2 {
+        return;
+    }
+
+    let s = ipc_state.lock().unwrap();
+    if let Some(active) = s.active_transfers.iter().find(|t| t.is_receiving) {
+        LAST_PREMATURE_NOTIF.store(now, std::sync::atomic::Ordering::Relaxed);
+        let pct = if active.total_bytes > 0 {
+            ((active.bytes_transferred as f64 / active.total_bytes as f64) * 100.0) as u32
+        } else {
+            0
+        };
+        let body = format!("⏳ Transfert en cours ({}%) — veuillez patienter avant de coller !", pct.min(99));
+        file_clipboard::show_notification("Manguesechee", &body);
+    }
+}
+
 
 /// Send files <= 15 MB inline over the primary connection.
 pub async fn send_fast_transfer(
@@ -226,6 +261,14 @@ pub async fn send_fast_transfer(
 ) -> anyhow::Result<()> {
     let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
     info!("sending fast-path files: '{first_name}' ({} bytes)", total_size);
+
+    let size_str = file_clipboard::format_bytes(total_size);
+    let start_msg = if files.len() == 1 {
+        format!("📤 Envoi de '{first_name}' ({size_str})…")
+    } else {
+        format!("📤 Envoi de {} fichiers ({size_str})…", files.len())
+    };
+    file_clipboard::show_notification("Manguesechee", &start_msg);
 
     {
         let mut s = ipc_state.lock().unwrap();
@@ -287,7 +330,7 @@ pub async fn send_fast_transfer(
         let mut s = ipc_state.lock().unwrap();
         s.active_transfers.retain(|t| t.transfer_id != transfer_id);
         s.transfer_history.insert(0, TransferHistoryEntry {
-            filename: first_name,
+            filename: first_name.clone(),
             total_bytes: total_size,
             completed_at: current_timestamp(),
             is_receiving: false,
@@ -298,6 +341,12 @@ pub async fn send_fast_transfer(
     }
 
     info!("fast-path file transfer completed ({} bytes)", total_size);
+    let done_msg = if files.len() == 1 {
+        format!("✅ Envoi terminé : '{first_name}'")
+    } else {
+        format!("✅ Envoi terminé de {} fichiers", files.len())
+    };
+    file_clipboard::show_notification("Manguesechee", &done_msg);
     Ok(())
 }
 
@@ -313,6 +362,14 @@ pub async fn send_fast_transfer_to_channel(
 ) -> anyhow::Result<()> {
     let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
     info!("sending fast-path files via channel: '{first_name}' ({} bytes)", total_size);
+
+    let size_str = file_clipboard::format_bytes(total_size);
+    let start_msg = if files.len() == 1 {
+        format!("📤 Envoi de '{first_name}' ({size_str})…")
+    } else {
+        format!("📤 Envoi de {} fichiers ({size_str})…", files.len())
+    };
+    file_clipboard::show_notification("Manguesechee", &start_msg);
 
     {
         let mut s = ipc_state.lock().unwrap();
@@ -374,7 +431,7 @@ pub async fn send_fast_transfer_to_channel(
         let mut s = ipc_state.lock().unwrap();
         s.active_transfers.retain(|t| t.transfer_id != transfer_id);
         s.transfer_history.insert(0, TransferHistoryEntry {
-            filename: first_name,
+            filename: first_name.clone(),
             total_bytes: total_size,
             completed_at: current_timestamp(),
             is_receiving: false,
@@ -385,6 +442,12 @@ pub async fn send_fast_transfer_to_channel(
     }
 
     info!("fast-path channel transfer completed ({} bytes)", total_size);
+    let done_msg = if files.len() == 1 {
+        format!("✅ Envoi terminé : '{first_name}'")
+    } else {
+        format!("✅ Envoi terminé de {} fichiers", files.len())
+    };
+    file_clipboard::show_notification("Manguesechee", &done_msg);
     Ok(())
 }
 
@@ -400,6 +463,16 @@ pub fn spawn_background_sender(
     let first_name = files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "files".into());
     info!("spawning dedicated background file sender for '{first_name}' ({} bytes) to {peer_addr}", total_size);
 
+    let size_str = file_clipboard::format_bytes(total_size);
+    let start_msg = if files.len() == 1 {
+        format!("📤 Envoi de '{first_name}' ({size_str})…")
+    } else {
+        format!("📤 Envoi de {} fichiers ({size_str})…", files.len())
+    };
+    file_clipboard::show_notification("Manguesechee", &start_msg);
+
+    let first_name_done = first_name.clone();
+    let files_count = files.len();
     tokio::spawn(async move {
         {
             let mut s = ipc_state.lock().unwrap();
@@ -442,6 +515,13 @@ pub fn spawn_background_sender(
         let mut s = ipc_state.lock().unwrap();
         s.active_transfers.retain(|t| t.transfer_id != transfer_id);
         if stream_ok {
+            let done_msg = if files_count == 1 {
+                format!("✅ Envoi terminé : '{first_name_done}'")
+            } else {
+                format!("✅ Envoi terminé de {files_count} fichiers")
+            };
+            file_clipboard::show_notification("Manguesechee", &done_msg);
+
             s.transfer_history.insert(0, TransferHistoryEntry {
                 filename: first_name,
                 total_bytes: total_size,

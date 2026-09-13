@@ -354,7 +354,7 @@ pub fn spawn_watcher(tx: mpsc::Sender<Message>) {
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(750));
+            std::thread::sleep(Duration::from_millis(350));
         }
     });
 }
