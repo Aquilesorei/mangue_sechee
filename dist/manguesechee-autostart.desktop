@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Manguesechee Tray
+GenericName=Software KVM
+Comment=Manguesechee KVM system tray service
+Exec=manguesechee-ui --tray
+Icon=manguesechee
+Categories=Utility;System;
+Keywords=kvm;input;remote;keyboard;mouse;
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+X-MATE-Autostart-Delay=2

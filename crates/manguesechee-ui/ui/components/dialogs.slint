@@ -259,3 +259,82 @@ export component PairingPinModal inherits Rectangle {
         }
     }
 }
+
+export component RenamePeerModal inherits Rectangle {
+    in-out property <string> address: "";
+    in-out property <string> new-name-input: "";
+    callback save(string, string);
+    callback randomize();
+    callback cancel();
+
+    background: Theme.scrim;
+    TouchArea { clicked => { root.cancel(); } }
+
+    Rectangle {
+        width: 440px;
+        height: 250px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: Theme.modal-bg;
+        border-width: 1px;
+        border-color: Theme.modal-border;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: Theme.is-dark ? #000000a6 : #0f172a33;
+        drop-shadow-offset-y: 8px;
+
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Edit Device Display Name";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Set a custom, memorable display name for this machine:";
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                name-edit := LineEdit {
+                    height: 38px;
+                    placeholder-text: "e.g. Sleepy Penguin, Peach, Angry Potato…";
+                    text <=> root.new-name-input;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "🎲 Randomize";
+                    clicked => { root.randomize(); }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                Button {
+                    text: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: "Save Display Name";
+                    primary: true;
+                    enabled: root.new-name-input != "";
+                    clicked => { root.save(root.address, root.new-name-input); }
+                }
+            }
+        }
+    }
+}

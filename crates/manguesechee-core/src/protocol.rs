@@ -72,7 +72,17 @@ pub enum Message {
     // ── Phase 1 ──────────────────────────────────────────────────────────────
     Ping,
     Pong,
-    Identity { name: String, id: String },
+    Identity {
+        name: String,
+        id: String,
+        #[serde(default)]
+        display_name: Option<String>,
+    },
+    /// Dynamic notification when a peer changes its display name.
+    IdentityUpdate {
+        name: String,
+        display_name: String,
+    },
 
     // ── TLS Negotiation ───────────────────────────────────────────────────────
     /// Sent immediately on connection to negotiate TLS upgrade.
@@ -97,9 +107,21 @@ pub enum Message {
 
     // ── Phase 5 — pairing ─────────────────────────────────────────────────────
     /// Initiator sends its identity + a 6-digit verification code.
-    PairRequest  { name: String, id: String, code: String },
+    PairRequest  {
+        name: String,
+        id: String,
+        code: String,
+        #[serde(default)]
+        display_name: Option<String>,
+    },
     /// Responder echoes the code back if the user accepted.
-    PairAccepted { name: String, id: String, code: String },
+    PairAccepted {
+        name: String,
+        id: String,
+        code: String,
+        #[serde(default)]
+        display_name: Option<String>,
+    },
     /// Responder rejected the pairing attempt.
     PairRejected { reason: String },
 

@@ -39,18 +39,25 @@ impl Default for Config {
 
 // ── Sub-sections ──────────────────────────────────────────────────────────────
 
+fn default_display_name() -> String {
+    crate::names::generate_random_name()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeviceConfig {
-    pub name: String,
-    pub id:   String,
+    pub name:         String,
+    #[serde(default = "default_display_name")]
+    pub display_name: String,
+    pub id:           String,
 }
 
 impl Default for DeviceConfig {
     fn default() -> Self {
         Self {
-            name: hostname(),
-            id:   uuid::Uuid::new_v4().to_string(),
+            name:         hostname(),
+            display_name: crate::names::generate_random_name(),
+            id:           uuid::Uuid::new_v4().to_string(),
         }
     }
 }
@@ -159,19 +166,25 @@ pub enum EdgeAlignment {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PeerConfig {
-    pub id:        String,
-    pub address:   Option<String>,  // host:port — optional if using discovery
-    pub position:  String,          // "left" | "right" | "above" | "below"
+    pub id:           String,
     #[serde(default)]
-    pub grid_x:    Option<i32>,
+    pub name:         Option<String>,
     #[serde(default)]
-    pub grid_y:    Option<i32>,
+    pub display_name: Option<String>,
+    pub address:      Option<String>,  // host:port — optional if using discovery
+    pub position:     String,          // "left" | "right" | "above" | "below"
     #[serde(default)]
-    pub alignment: Option<String>, // "center" | "top" | "bottom"
+    pub grid_x:       Option<i32>,
+    #[serde(default)]
+    pub grid_y:       Option<i32>,
+    #[serde(default)]
+    pub alignment:    Option<String>, // "center" | "top" | "bottom"
 }
 
 impl PeerConfig {
     pub fn new(id: impl Into<String>, address: Option<String>, position: impl Into<String>) -> Self {
+        let id_str = id.into();
+        let disp = crate::names::format_display_name(None, &id_str);
         let pos = position.into();
         let (gx, gy) = match pos.trim().to_lowercase().as_str() {
             "left" => (-1, 0),
@@ -180,7 +193,9 @@ impl PeerConfig {
             _ => (1, 0),
         };
         Self {
-            id: id.into(),
+            id: id_str,
+            name: None,
+            display_name: Some(disp),
             address,
             position: pos,
             grid_x: Some(gx),
@@ -190,6 +205,8 @@ impl PeerConfig {
     }
 
     pub fn with_coords(id: impl Into<String>, address: Option<String>, grid_x: i32, grid_y: i32) -> Self {
+        let id_str = id.into();
+        let disp = crate::names::format_display_name(None, &id_str);
         let position = match (grid_x, grid_y) {
             (-1, 0) => "left".to_string(),
             (1, 0) => "right".to_string(),
@@ -201,13 +218,27 @@ impl PeerConfig {
             _ => "below".to_string(),
         };
         Self {
-            id: id.into(),
+            id: id_str,
+            name: None,
+            display_name: Some(disp),
             address,
             position,
             grid_x: Some(grid_x),
             grid_y: Some(grid_y),
             alignment: None,
         }
+    }
+
+    pub fn with_display_name(mut self, display_name: Option<String>) -> Self {
+        self.display_name = display_name;
+        self
+    }
+
+    pub fn effective_display_name(&self) -> String {
+        crate::names::format_display_name(
+            self.display_name.as_deref().or(self.name.as_deref()),
+            &self.id,
+        )
     }
 
     pub fn with_alignment(mut self, alignment: Option<String>) -> Self {
@@ -254,8 +285,25 @@ pub fn load() -> anyhow::Result<Config> {
         .with_context(|| format!("read {}", path.display()))?;
     let mut cfg: Config = toml::from_str(&text)
         .with_context(|| format!("parse {}", path.display()))?;
+    let mut modified = false;
+
     if cfg.device.id.trim().is_empty() {
         cfg.device.id = uuid::Uuid::new_v4().to_string();
+        modified = true;
+    }
+    if cfg.device.display_name.trim().is_empty() || crate::names::is_raw_uuid(&cfg.device.display_name) {
+        cfg.device.display_name = crate::names::generate_random_name();
+        modified = true;
+    }
+
+    for p in &mut cfg.peers {
+        if p.display_name.as_deref().map(|d| d.trim().is_empty() || crate::names::is_raw_uuid(d)).unwrap_or(true) {
+            p.display_name = Some(p.effective_display_name());
+            modified = true;
+        }
+    }
+
+    if modified {
         let _ = save(&cfg);
     }
     Ok(cfg)

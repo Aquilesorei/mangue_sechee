@@ -10,6 +10,7 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub struct AgentState {
     pub local_name:            String,
+    pub local_display_name:    String,
     pub connected_to:          Option<String>,
     pub discovery:             bool,
     pub file_transfer_enabled: bool,
@@ -30,6 +31,7 @@ impl Default for AgentState {
     fn default() -> Self {
         Self {
             local_name:            String::new(),
+            local_display_name:    String::new(),
             connected_to:          None,
             discovery:             true,
             file_transfer_enabled: true,
@@ -122,6 +124,7 @@ fn handle_command(
             let s = state.lock().unwrap();
             AgentEvent::Status {
                 local_name:            s.local_name.clone(),
+                local_display_name:    s.local_display_name.clone(),
                 connected_to:          s.connected_to.clone(),
                 discovery:             s.discovery,
                 file_transfer_enabled: s.file_transfer_enabled,
@@ -334,6 +337,44 @@ fn handle_command(
                 let _ = manguesechee_core::config::save(&cfg);
             }
             let _ = broadcast_tx.send(manguesechee_core::protocol::Message::TopologySync { position: pos_str });
+            AgentEvent::Ok
+        }
+        GuiCommand::SetDisplayName { display_name } => {
+            let clean = display_name.trim().to_string();
+            info!("IPC: update local display name to '{clean}'");
+            {
+                let mut s = state.lock().unwrap();
+                s.local_display_name = clean.clone();
+            }
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                cfg.device.display_name = clean.clone();
+                let _ = manguesechee_core::config::save(&cfg);
+            }
+            let _ = broadcast_tx.send(manguesechee_core::protocol::Message::IdentityUpdate {
+                name: state.lock().unwrap().local_name.clone(),
+                display_name: clean,
+            });
+            AgentEvent::Ok
+        }
+        GuiCommand::SetPeerDisplayName { address, display_name } => {
+            let clean = display_name.trim().to_string();
+            info!("IPC: update peer display name for {address} to '{clean}'");
+            {
+                let mut s = state.lock().unwrap();
+                for p in &mut s.peers {
+                    if p.address == address || address.contains(&p.address) || p.address.contains(&address) {
+                        p.display_name = clean.clone();
+                    }
+                }
+            }
+            if let Ok(mut cfg) = manguesechee_core::config::load() {
+                for p in &mut cfg.peers {
+                    if p.address.as_deref().map(|a| a == address || address.contains(a) || a.contains(&address)).unwrap_or(false) {
+                        p.display_name = Some(clean.clone());
+                    }
+                }
+                let _ = manguesechee_core::config::save(&cfg);
+            }
             AgentEvent::Ok
         }
         GuiCommand::Shutdown => {

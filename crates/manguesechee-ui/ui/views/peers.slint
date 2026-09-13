@@ -20,6 +20,7 @@ export component PeersView inherits VerticalBox {
     callback dismiss-error();
     callback open-connect-modal();
     callback open-unpair-modal(string);
+    callback open-rename-modal(string, string);
     callback connect-requested(string);
     callback disconnect-requested();
     callback ping-peer(string);
@@ -252,7 +253,7 @@ export component PeersView inherits VerticalBox {
                 padding-right: 6px;
 
                 for peer[i] in root.peers : Rectangle {
-                    height: 64px;
+                    min-height: 72px;
                     background: Theme.surface-card;
                     border-radius: 8px;
                     border-width: 1px;
@@ -273,13 +274,14 @@ export component PeersView inherits VerticalBox {
                         }
 
                         VerticalBox {
-                            spacing: 2px;
+                            alignment: center;
+                            spacing: 4px;
                             horizontal-stretch: 1;
 
                             HorizontalBox {
                                 spacing: 8px;
                                 Text {
-                                    text: peer.name;
+                                    text: peer.display-name != "" ? peer.display-name : peer.name;
                                     font-size: 14px;
                                     font-weight: 700;
                                     color: Theme.text-primary;
@@ -322,6 +324,12 @@ export component PeersView inherits VerticalBox {
                             model: ["Right", "Left", "Above", "Below"];
                             current-index: peer.position == "left" ? 1 : (peer.position == "above" ? 2 : (peer.position == "below" ? 3 : 0));
                             selected => { root.update-peer-position(peer.address, self.current-value.to-lowercase()); }
+                        }
+
+                        // Rename button
+                        Button {
+                            text: "Rename";
+                            clicked => { root.open-rename-modal(peer.address, peer.display-name != "" ? peer.display-name : peer.name); }
                         }
 
                         // Ping button

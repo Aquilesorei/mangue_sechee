@@ -96,13 +96,15 @@ cargo build --release --workspace
 
 AGENT_BIN="$REPO_ROOT/target/release/manguesechee-agent"
 UI_BIN="$REPO_ROOT/target/release/manguesechee-ui"
+CLI_BIN="$REPO_ROOT/target/release/manguesechee-cli"
 ICON_256="$REPO_ROOT/assets/icons/manguesechee-256.png"
 ICON_48="$REPO_ROOT/assets/icons/manguesechee-48.png"
 DESKTOP="$DIST_DIR/manguesechee-ui.desktop"
+AUTOSTART="$DIST_DIR/manguesechee-autostart.desktop"
 SERVICE="$DIST_DIR/manguesechee-agent.service"
 UDEV="$DIST_DIR/99-manguesechee.rules"
 
-for f in "$AGENT_BIN" "$UI_BIN"; do
+for f in "$AGENT_BIN" "$UI_BIN" "$CLI_BIN"; do
   [[ -f "$f" ]] || { echo "error: binary not found: $f"; exit 1; }
 done
 
@@ -116,10 +118,13 @@ build_deb() {
 
   install -Dm755 "$AGENT_BIN"  "$STAGE/usr/bin/manguesechee-agent"
   install -Dm755 "$UI_BIN"     "$STAGE/usr/bin/manguesechee-ui"
+  install -Dm755 "$CLI_BIN"    "$STAGE/usr/bin/manguesechee-cli"
   install -Dm755 "$DIST_DIR/post-install.sh" "$STAGE/usr/lib/manguesechee/post-install.sh"
   install -Dm644 "$SERVICE"    "$STAGE/usr/lib/systemd/user/manguesechee-agent.service"
   install -Dm644 "$UDEV"       "$STAGE/usr/lib/udev/rules.d/99-manguesechee.rules"
   install -Dm644 "$DESKTOP"    "$STAGE/usr/share/applications/manguesechee-ui.desktop"
+  install -Dm644 "$AUTOSTART"  "$STAGE/etc/xdg/autostart/manguesechee-ui.desktop"
+  install -Dm644 "$AUTOSTART"  "$STAGE/usr/share/manguesechee/manguesechee-autostart.desktop"
   install -Dm644 "$ICON_256"   "$STAGE/usr/share/icons/hicolor/256x256/apps/manguesechee.png"
   install -Dm644 "$ICON_48"    "$STAGE/usr/share/icons/hicolor/48x48/apps/manguesechee.png"
   install -Dm644 "$REPO_ROOT/README.md" "$STAGE/usr/share/doc/manguesechee/README.md"
@@ -189,10 +194,13 @@ $DESCRIPTION
 %install
 install -Dm755 $AGENT_BIN                   %{buildroot}/usr/bin/manguesechee-agent
 install -Dm755 $UI_BIN                      %{buildroot}/usr/bin/manguesechee-ui
+install -Dm755 $CLI_BIN                     %{buildroot}/usr/bin/manguesechee-cli
 install -Dm755 $DIST_DIR/post-install.sh    %{buildroot}/usr/lib/manguesechee/post-install.sh
 install -Dm644 $SERVICE                     %{buildroot}/usr/lib/systemd/user/manguesechee-agent.service
 install -Dm644 $UDEV                        %{buildroot}/usr/lib/udev/rules.d/99-manguesechee.rules
 install -Dm644 $DESKTOP                     %{buildroot}/usr/share/applications/manguesechee-ui.desktop
+install -Dm644 $AUTOSTART                   %{buildroot}/etc/xdg/autostart/manguesechee-ui.desktop
+install -Dm644 $AUTOSTART                   %{buildroot}/usr/share/manguesechee/manguesechee-autostart.desktop
 install -Dm644 $ICON_256                    %{buildroot}/usr/share/icons/hicolor/256x256/apps/manguesechee.png
 install -Dm644 $ICON_48                     %{buildroot}/usr/share/icons/hicolor/48x48/apps/manguesechee.png
 install -Dm644 $REPO_ROOT/README.md          %{buildroot}/usr/share/doc/manguesechee/README.md
@@ -200,10 +208,13 @@ install -Dm644 $REPO_ROOT/README.md          %{buildroot}/usr/share/doc/manguese
 %files
 /usr/bin/manguesechee-agent
 /usr/bin/manguesechee-ui
+/usr/bin/manguesechee-cli
 /usr/lib/manguesechee/post-install.sh
 /usr/lib/systemd/user/manguesechee-agent.service
 /usr/lib/udev/rules.d/99-manguesechee.rules
 /usr/share/applications/manguesechee-ui.desktop
+/etc/xdg/autostart/manguesechee-ui.desktop
+/usr/share/manguesechee/manguesechee-autostart.desktop
 /usr/share/icons/hicolor/256x256/apps/manguesechee.png
 /usr/share/icons/hicolor/48x48/apps/manguesechee.png
 /usr/share/doc/manguesechee/README.md

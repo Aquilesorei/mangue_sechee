@@ -46,6 +46,17 @@ fn main() -> anyhow::Result<()> {
         window.set_is_service_running(running);
         window.set_status(if running { "Ready".into() } else { "Service Stopped".into() });
         window.set_view(AppView::Main);
+
+        let start_in_tray = std::env::args().any(|a| a == "--tray" || a == "--minimized" || a == "-m");
+        if start_in_tray {
+            info!("Started with --tray / --minimized flag; hiding window to system tray");
+            let w = window.as_weak();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = w.upgrade() {
+                    let _ = w.hide();
+                }
+            });
+        }
     }
 
     // Populate UI from current config
@@ -273,6 +284,13 @@ fn main() -> anyhow::Result<()> {
                 w.set_local_name(dev_name.into());
             }
 
+            let disp_name = w.get_setting_display_name().trim().to_string();
+            if !disp_name.is_empty() {
+                cfg.device.display_name = disp_name.clone();
+                w.set_local_display_name(disp_name.clone().into());
+                send_ipc(ipc::GuiCommand::SetDisplayName { display_name: disp_name });
+            }
+
             // Role: 0=Both, 1=Controller, 2=Peer
             let role_idx = w.get_setting_role();
             cfg.input.enabled = role_idx != 2;
@@ -353,6 +371,62 @@ fn main() -> anyhow::Result<()> {
                     show_toast(&w, &format!("Config error: {e}"), true);
                 }
             }
+        });
+    }
+
+    // ── Randomize Display Name ──────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_randomize_display_name(move || {
+            let Some(w) = w.upgrade() else { return };
+            let mut excluded: Vec<String> = w.get_peers()
+                .iter()
+                .map(|p| p.display_name.to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let current_local = w.get_local_display_name().to_string();
+            if !current_local.is_empty() {
+                excluded.push(current_local);
+            }
+            let rand_name = manguesechee_core::names::generate_free_name(&excluded);
+            w.set_setting_display_name(rand_name.clone().into());
+            w.set_modal_rename_name(rand_name.clone().into());
+            show_toast(&w, &format!("🎲 Generated free name: {rand_name}"), false);
+        });
+    }
+
+    // ── Rename Peer Display Name ────────────────────────────────────────────
+    {
+        let w = window.as_weak();
+        window.on_rename_peer(move |addr, new_name| {
+            let Some(w) = w.upgrade() else { return };
+            let addr_str = addr.to_string();
+            let name_str = new_name.trim().to_string();
+            if name_str.is_empty() { return; }
+
+            send_ipc(ipc::GuiCommand::SetPeerDisplayName {
+                address: addr_str.clone(),
+                display_name: name_str.clone(),
+            });
+
+            if let Ok(mut cfg) = config::load() {
+                for p in &mut cfg.peers {
+                    if p.address.as_deref().map(|a| a == addr_str || addr_str.contains(a) || a.contains(&addr_str)).unwrap_or(false) {
+                        p.display_name = Some(name_str.clone());
+                    }
+                }
+                let _ = config::save(&cfg);
+            }
+
+            let mut peers: Vec<PeerEntry> = w.get_peers().iter().collect();
+            for p in &mut peers {
+                if p.address == addr_str || addr_str.contains(p.address.as_str()) {
+                    p.display_name = name_str.clone().into();
+                    p.name = name_str.clone().into();
+                }
+            }
+            w.set_peers(peers.as_slice().into());
+            show_toast(&w, &format!("Renamed to: {name_str}"), false);
         });
     }
 
@@ -817,20 +891,28 @@ fn main() -> anyhow::Result<()> {
 
                 // Periodic status polling via IPC
                 if let Some(ipc::AgentEvent::Status {
-                    local_name, connected_to, discovery, file_transfer_enabled, tls_enabled, tls_active, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history, ..
+                    local_name, local_display_name, connected_to, discovery, file_transfer_enabled, tls_enabled, tls_active, peers, cursor_locked, last_error, topology_configured, active_transfers, transfer_history, ..
                 }) = poll_status()
                 {
+                    let status_str = match &connected_to {
+                        Some(p) => {
+                            let peer_disp = peers.iter()
+                                .find(|item| item.address == *p || p.contains(&item.address))
+                                .map(|item| item.effective_display_name())
+                                .unwrap_or_else(|| manguesechee_core::names::clean_display_name("", p));
+                            format!("Forwarding → {peer_disp}")
+                        }
+                        None => "Ready".into(),
+                    };
+
                     if let Some(ref handle) = th {
-                        let status_str = match &connected_to {
-                            Some(p) => format!("Forwarding → {p}"),
-                            None    => "Ready".into(),
-                        };
                         let is_fwd = connected_to.is_some();
                         let locked = cursor_locked;
                         let conn = connected_to.clone();
                         let p_list = peers.clone();
+                        let s_str = status_str.clone();
                         handle.update(move |t| {
-                            t.status_text = status_str;
+                            t.status_text = s_str;
                             t.is_service_running = true;
                             t.is_forwarding = is_fwd;
                             t.cursor_locked = locked;
@@ -840,15 +922,22 @@ fn main() -> anyhow::Result<()> {
                     }
 
                     w.set_local_name(local_name.into());
+                    if !local_display_name.trim().is_empty() {
+                        let prev_disp = w.get_local_display_name().to_string();
+                        if prev_disp != local_display_name {
+                            w.set_local_display_name(local_display_name.clone().into());
+                            w.set_setting_display_name(local_display_name.clone().into());
+                            if !prev_disp.is_empty() && prev_disp != "Quantum Toaster" && prev_disp != "unknown" {
+                                show_toast(&w, &format!("LAN collision resolved: renamed to '{local_display_name}'"), false);
+                            }
+                        }
+                    }
                     w.set_discovery(discovery);
                     w.set_setting_file_transfer(file_transfer_enabled);
                     w.set_setting_tls(tls_enabled);
                     w.set_tls_active(tls_active);
                     w.set_cursor_locked(cursor_locked);
-                    w.set_status(match &connected_to {
-                        Some(p) => format!("Forwarding → {p}").into(),
-                        None    => "Ready".into(),
-                    });
+                    w.set_status(status_str.into());
 
                     // File transfer updates
                     let transfers: Vec<TransferItem> = active_transfers.iter().map(|t| {
@@ -882,7 +971,6 @@ fn main() -> anyhow::Result<()> {
                         w.set_connection_error(err.into());
                     }
 
-
                     // Connected peer detection
                     let active_peer_info = peers.iter().find(|p| p.connected);
                     let is_connected = connected_to.is_some() || active_peer_info.is_some();
@@ -890,12 +978,13 @@ fn main() -> anyhow::Result<()> {
                     if let Some(ref p) = connected_to {
                         let peer_name = peers.iter()
                             .find(|item| item.address == *p || p.contains(&item.address))
-                            .map(|item| item.name.clone())
-                            .unwrap_or_else(|| p.clone());
+                            .map(|item| item.effective_display_name())
+                            .unwrap_or_else(|| manguesechee_core::names::clean_display_name("", p));
                         w.set_connected_peer(format!("{peer_name} ({p})").into());
                         w.set_connection_error("".into());
                     } else if let Some(p) = active_peer_info {
-                        w.set_connected_peer(format!("{} ({})", p.name, p.address).into());
+                        let peer_name = p.effective_display_name();
+                        w.set_connected_peer(format!("{peer_name} ({})", p.address).into());
                         w.set_connection_error("".into());
                     } else {
                         w.set_connected_peer("".into());
@@ -927,7 +1016,7 @@ fn main() -> anyhow::Result<()> {
                                 };
                                 let peer_name = peers.iter()
                                     .find(|p| p.connected || connected_to.as_deref() == Some(&p.address))
-                                    .map(|p| p.name.clone())
+                                    .map(|p| p.effective_display_name())
                                     .unwrap_or_else(|| "peer".to_string());
                                 w.set_topology_notice(format!("Screen arranged on your {pos_display} (synchronized with {peer_name}).").into());
                             }
@@ -943,15 +1032,17 @@ fn main() -> anyhow::Result<()> {
                             .find(|cp| cp.address == p.address.as_str())
                             .map(|cp| cp.ping_status.clone())
                             .unwrap_or_default();
+                        let disp = p.effective_display_name();
                         PeerEntry {
-                            name:        p.name.clone().into(),
-                            address:     p.address.clone().into(),
-                            paired:      p.paired,
-                            connected:   p.connected,
-                            position:    if !p.position.is_empty() { p.position.clone().into() } else { default_pos.clone().into() },
-                            ping_status: existing_ping,
-                            grid_x:      p.grid_x,
-                            grid_y:      p.grid_y,
+                            name:         disp.clone().into(),
+                            display_name: disp.into(),
+                            address:      p.address.clone().into(),
+                            paired:       p.paired,
+                            connected:    p.connected,
+                            position:     if !p.position.is_empty() { p.position.clone().into() } else { default_pos.clone().into() },
+                            ping_status:  existing_ping,
+                            grid_x:       p.grid_x,
+                            grid_y:       p.grid_y,
                         }
                     }).collect();
                     w.set_peers(entries.as_slice().into());
@@ -997,7 +1088,9 @@ fn populate_settings_from_config(w: &MainWindow, cfg: &config::Config) {
     w.set_is_dark(is_dark);
     w.set_local_ip(detect_local_ip().into());
     w.set_local_name(cfg.device.name.clone().into());
+    w.set_local_display_name(cfg.device.display_name.clone().into());
     w.set_setting_name(cfg.device.name.clone().into());
+    w.set_setting_display_name(cfg.device.display_name.clone().into());
     w.set_setting_port(cfg.network.port.to_string().into());
     w.set_setting_discovery(cfg.network.discovery);
     w.set_setting_clipboard(cfg.clipboard.enabled);

@@ -54,6 +54,7 @@ pub async fn connect_to(
     addr:               &str,
     local_name:         String,
     local_id:           String,
+    local_display_name: String,
     mouse_path:         Option<PathBuf>,
     keyboard_path:      Option<PathBuf>,
     screen_width:       u32,
@@ -96,9 +97,20 @@ pub async fn connect_to(
     ipc_state.lock().unwrap().tls_active = tls_active;
 
     // ── Identity ──────────────────────────────────────────────────────────────
-    transport.send(&Message::Identity { name: local_name.clone(), id: local_id.clone() }).await?;
-    let (peer_name, peer_id) = match transport.receive().await? {
-        Message::Identity { name, id } => { info!("peer: name={name} id={id}"); (name, id) }
+    transport.send(&Message::Identity {
+        name: local_name.clone(),
+        id: local_id.clone(),
+        display_name: Some(local_display_name.clone()),
+    }).await?;
+    let (peer_name, peer_id, peer_display_name) = match transport.receive().await? {
+        Message::Identity { name, id, display_name } => {
+            let disp = manguesechee_core::names::clean_display_name(
+                display_name.as_deref().unwrap_or(""),
+                &id,
+            );
+            info!("peer: name={name} id={id} display={disp}");
+            (name, id, disp)
+        }
         other => anyhow::bail!("expected Identity, got {other:?}"),
     };
 
@@ -108,10 +120,13 @@ pub async fn connect_to(
         let code = generate_code();
         show_outgoing_code(&peer_name, &code);
         transport.send(&Message::PairRequest {
-            name: local_name.clone(), id: local_id.clone(), code: code.clone(),
+            name: local_name.clone(),
+            id: local_id.clone(),
+            code: code.clone(),
+            display_name: Some(local_display_name.clone()),
         }).await?;
         match transport.receive().await? {
-            Message::PairAccepted { code: c, name, id } => {
+            Message::PairAccepted { code: c, name, id, .. } => {
                 anyhow::ensure!(c == code, "pairing code mismatch");
                 info!("paired with '{name}'");
                 known.add(id, name);
@@ -132,6 +147,9 @@ pub async fn connect_to(
         if let Some(p) = s.peers.iter_mut().find(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(addr) || p.name == peer_name) {
             p.connected = true;
             p.paired = true;
+            if !manguesechee_core::names::is_raw_uuid(&peer_display_name) {
+                p.display_name = peer_display_name.clone();
+            }
             if !p.address.contains(':') {
                 p.address = addr.to_string();
             }
@@ -149,6 +167,7 @@ pub async fn connect_to(
 
             s.peers.push(manguesechee_core::ipc::PeerInfo {
                 name: peer_name.clone(),
+                display_name: peer_display_name.clone(),
                 address: addr.to_string(),
                 paired: true,
                 connected: true,
@@ -166,11 +185,13 @@ pub async fn connect_to(
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
         if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(addr) || p.address.as_deref().is_some_and(|a| !a.is_empty() && addr.contains(a))) {
-            cfg.peers.push(manguesechee_core::config::PeerConfig::new(
-                peer_id.clone(),
-                Some(addr.to_string()),
-                existing_pos,
-            ));
+            cfg.peers.push(
+                manguesechee_core::config::PeerConfig::new(
+                    peer_id.clone(),
+                    Some(addr.to_string()),
+                    existing_pos,
+                ).with_display_name(Some(peer_display_name.clone()))
+            );
             let _ = manguesechee_core::config::save(&cfg);
         }
     }
@@ -373,6 +394,34 @@ pub async fn connect_to(
                                 || (!p_addr.is_empty() && p_addr.contains(&peer_addr_str))
                             {
                                 p.position = opp.clone();
+                            }
+                        }
+                        let _ = manguesechee_core::config::save(&cfg);
+                    }
+                }
+                Ok(Message::IdentityUpdate { name, display_name }) => {
+                    info!("← peer updated identity: name={name} display={display_name}");
+                    {
+                        let mut s = state_for_recv.lock().unwrap();
+                        for p in &mut s.peers {
+                            if p.address == peer_addr_str
+                                || peer_addr_str.contains(&p.address)
+                                || p.address.contains(&peer_addr_str)
+                                || p.name == name
+                            {
+                                p.display_name = display_name.clone();
+                            }
+                        }
+                    }
+                    if let Ok(mut cfg) = manguesechee_core::config::load() {
+                        for p in &mut cfg.peers {
+                            let p_addr = p.address.as_deref().unwrap_or("");
+                            if p_addr == peer_addr_str
+                                || peer_addr_str.contains(p_addr)
+                                || (!p_addr.is_empty() && p_addr.contains(&peer_addr_str))
+                                || p.name.as_deref() == Some(&name)
+                            {
+                                p.display_name = Some(display_name.clone());
                             }
                         }
                         let _ = manguesechee_core::config::save(&cfg);

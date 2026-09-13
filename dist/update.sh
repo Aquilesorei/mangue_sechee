@@ -88,9 +88,11 @@ fi
 
 AGENT_BIN="$REPO_ROOT/target/release/manguesechee-agent"
 UI_BIN="$REPO_ROOT/target/release/manguesechee-ui"
+CLI_BIN="$REPO_ROOT/target/release/manguesechee-cli"
 
 [[ -f "$AGENT_BIN" ]] || { echo "error: $AGENT_BIN not found"; exit 1; }
 [[ -f "$UI_BIN"    ]] || { echo "error: $UI_BIN not found"; exit 1; }
+[[ -f "$CLI_BIN"   ]] || { echo "error: $CLI_BIN not found"; exit 1; }
 
 # ── 3. Install Binaries and Desktop Assets ────────────────────────────────────
 
@@ -102,10 +104,29 @@ fi
 
 $SUDO_CMD install -Dm755 "$AGENT_BIN" /usr/bin/manguesechee-agent
 $SUDO_CMD install -Dm755 "$UI_BIN"    /usr/bin/manguesechee-ui
+$SUDO_CMD install -Dm755 "$CLI_BIN"   /usr/bin/manguesechee-cli
 
 # Update desktop launcher and icons if present
 if [[ -f "$REPO_ROOT/dist/manguesechee-ui.desktop" ]]; then
     $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/manguesechee-ui.desktop" /usr/share/applications/manguesechee-ui.desktop
+fi
+if [[ -f "$REPO_ROOT/dist/manguesechee-autostart.desktop" ]]; then
+    $SUDO_CMD mkdir -p /etc/xdg/autostart
+    $SUDO_CMD install -Dm644 "$REPO_ROOT/dist/manguesechee-autostart.desktop" /etc/xdg/autostart/manguesechee-ui.desktop
+fi
+if [[ -n "$TARGET_USER" && -n "$TARGET_UID" ]]; then
+    TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+    if [[ -d "$TARGET_HOME" && -f "$REPO_ROOT/dist/manguesechee-autostart.desktop" ]]; then
+        USER_AUTOSTART="$TARGET_HOME/.config/autostart"
+        mkdir -p "$USER_AUTOSTART"
+        if [[ ! -f "$USER_AUTOSTART/manguesechee-ui.desktop" ]]; then
+            cp "$REPO_ROOT/dist/manguesechee-autostart.desktop" "$USER_AUTOSTART/manguesechee-ui.desktop" 2>/dev/null || true
+            chown -R "$TARGET_USER:$TARGET_USER" "$USER_AUTOSTART/manguesechee-ui.desktop" 2>/dev/null || true
+            echo "    ✓ Configured user autostart (~/.config/autostart/manguesechee-ui.desktop)"
+        else
+            echo "    ✓ User autostart already exists at $USER_AUTOSTART/manguesechee-ui.desktop (preserved)"
+        fi
+    fi
 fi
 if [[ -f "$REPO_ROOT/assets/icons/manguesechee-256.png" ]]; then
     $SUDO_CMD install -Dm644 "$REPO_ROOT/assets/icons/manguesechee-256.png" /usr/share/icons/hicolor/256x256/apps/manguesechee.png

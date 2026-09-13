@@ -14,15 +14,16 @@ use crate::edge::EdgeDetector;
 use crate::session::{load_known_peers, prompt_accept, save_known_peers};
 
 pub async fn run(
-    listener:      TcpListener,
-    local_name:    String,
-    local_id:      String,
-    screen_width:  u32,
-    screen_height: u32,
-    port:          u16,
-    ipc_state:     crate::ipc_server::SharedState,
-    connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
-    broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
+    listener:           TcpListener,
+    local_name:         String,
+    local_id:           String,
+    local_display_name: String,
+    screen_width:       u32,
+    screen_height:      u32,
+    port:               u16,
+    ipc_state:          crate::ipc_server::SharedState,
+    connect_tx:         tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx:       tokio::sync::broadcast::Sender<Message>,
 ) {
     if let Ok(addr) = listener.local_addr() {
         info!("listening on {addr}");
@@ -33,11 +34,12 @@ pub async fn run(
                 info!("incoming from {peer_addr}");
                 let name = local_name.clone();
                 let id   = local_id.clone();
+                let disp = local_display_name.clone();
                 let state = std::sync::Arc::clone(&ipc_state);
                 let tx = connect_tx.clone();
                 let b_tx = broadcast_tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle(stream, peer_addr, name, id, screen_width, screen_height, port, state, tx, b_tx).await {
+                    if let Err(e) = handle(stream, peer_addr, name, id, disp, screen_width, screen_height, port, state, tx, b_tx).await {
                         error!("session error from {peer_addr}: {e:#}");
                     }
                 });
@@ -48,22 +50,23 @@ pub async fn run(
 }
 
 async fn handle(
-    stream:        tokio::net::TcpStream,
-    peer_addr:     std::net::SocketAddr,
-    local_name:    String,
-    local_id:      String,
-    screen_width:  u32,
-    screen_height: u32,
-    port:          u16,
-    ipc_state:     crate::ipc_server::SharedState,
-    connect_tx:    tokio::sync::mpsc::UnboundedSender<String>,
-    broadcast_tx:  tokio::sync::broadcast::Sender<Message>,
+    stream:             tokio::net::TcpStream,
+    peer_addr:          std::net::SocketAddr,
+    local_name:         String,
+    local_id:           String,
+    local_display_name: String,
+    screen_width:       u32,
+    screen_height:      u32,
+    port:               u16,
+    ipc_state:          crate::ipc_server::SharedState,
+    connect_tx:         tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx:       tokio::sync::broadcast::Sender<Message>,
 ) -> anyhow::Result<()> {
     let mut transport = wrap(stream);
 
     // ── TLS Upgrade Negotiation ────────────────────────────────────────────────
     let first_msg = transport.receive().await?;
-    let (_peer_name, peer_id) = match first_msg {
+    let (_peer_name, peer_id, peer_display_name) = match first_msg {
         Message::StartTls { requested } => {
             let local_tls_enabled = ipc_state.lock().unwrap().tls_enabled;
             let should_accept = requested && local_tls_enabled;
@@ -87,9 +90,13 @@ async fn handle(
                     info!("incoming dedicated file channel from {peer_addr} (transfer {transfer_id})");
                     return crate::file_transfer::handle_incoming_file_channel(transport, transfer_id, ipc_state).await;
                 }
-                Message::Identity { name, id } => {
-                    info!("peer: name={name} id={id}");
-                    (name, id)
+                Message::Identity { name, id, display_name } => {
+                    let disp = manguesechee_core::names::clean_display_name(
+                        display_name.as_deref().unwrap_or(""),
+                        &id,
+                    );
+                    info!("peer: name={name} id={id} display={disp}");
+                    (name, id, disp)
                 }
                 other => anyhow::bail!("expected Identity or FileChannelInit after TLS negotiation, got {other:?}"),
             }
@@ -99,14 +106,22 @@ async fn handle(
             info!("incoming dedicated file channel from {peer_addr} (transfer {transfer_id})");
             return crate::file_transfer::handle_incoming_file_channel(transport, transfer_id, ipc_state).await;
         }
-        Message::Identity { name, id } => {
+        Message::Identity { name, id, display_name } => {
             ipc_state.lock().unwrap().tls_active = false;
-            info!("peer: name={name} id={id}");
-            (name, id)
+            let disp = manguesechee_core::names::clean_display_name(
+                display_name.as_deref().unwrap_or(""),
+                &id,
+            );
+            info!("peer: name={name} id={id} display={disp}");
+            (name, id, disp)
         }
         other => anyhow::bail!("expected StartTls or Identity or FileChannelInit, got {other:?}"),
     };
-    transport.send(&Message::Identity { name: local_name.clone(), id: local_id.clone() }).await?;
+    transport.send(&Message::Identity {
+        name: local_name.clone(),
+        id: local_id.clone(),
+        display_name: Some(local_display_name.clone()),
+    }).await?;
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     let mut known = load_known_peers().unwrap_or_default();
@@ -115,7 +130,7 @@ async fn handle(
     if !known.contains(&peer_id) {
         let first_msg = transport.receive().await?;
         match first_msg {
-            Message::PairRequest { name, id, code } => {
+            Message::PairRequest { name, id, code, .. } => {
                 let accepted = tokio::task::spawn_blocking({
                     let name = name.clone(); let code = code.clone();
                     move || prompt_accept(&name, &code)
@@ -123,7 +138,10 @@ async fn handle(
 
                 if accepted {
                     transport.send(&Message::PairAccepted {
-                        name: local_name.clone(), id: local_id.clone(), code,
+                        name: local_name.clone(),
+                        id: local_id.clone(),
+                        code,
+                        display_name: Some(local_display_name.clone()),
                     }).await?;
                     known.add(id, name.clone());
                     let _ = save_known_peers(&known);
@@ -154,6 +172,9 @@ async fn handle(
         let mut s = ipc_state.lock().unwrap();
         if let Some(existing) = s.peers.iter_mut().find(|p| p.address.contains(&peer_ip) || p.name == _peer_name) {
             existing.paired = true;
+            if !manguesechee_core::names::is_raw_uuid(&peer_display_name) {
+                existing.display_name = peer_display_name.clone();
+            }
             if !existing.address.contains(':') {
                 existing.address = peer_target_addr.clone();
             }
@@ -170,18 +191,20 @@ async fn handle(
                 true,
                 false,
                 pos.clone(),
-            ));
+            ).with_display_name(peer_display_name.clone()));
             pos
         }
     };
 
     if let Ok(mut cfg) = manguesechee_core::config::load() {
         if !cfg.peers.iter().any(|p| p.address.as_deref().unwrap_or("").contains(&peer_ip)) {
-            cfg.peers.push(manguesechee_core::config::PeerConfig::new(
-                peer_id.clone(),
-                Some(peer_target_addr.clone()),
-                existing_pos,
-            ));
+            cfg.peers.push(
+                manguesechee_core::config::PeerConfig::new(
+                    peer_id.clone(),
+                    Some(peer_target_addr.clone()),
+                    existing_pos,
+                ).with_display_name(Some(peer_display_name.clone()))
+            );
             let _ = manguesechee_core::config::save(&cfg);
         }
 
@@ -404,11 +427,34 @@ async fn handle(
                 }
             }
 
-            Message::PairRequest { name, id, code } => {
+            Message::PairRequest { name, id, code, .. } => {
                 info!("received PairRequest during session from {name} ({id}) — re-accepting");
                 let _ = out_tx.try_send(Message::PairAccepted {
-                    name: local_name.clone(), id: local_id.clone(), code,
+                    name: local_name.clone(),
+                    id: local_id.clone(),
+                    code,
+                    display_name: Some(local_display_name.clone()),
                 });
+            }
+
+            Message::IdentityUpdate { name, display_name } => {
+                info!("received IdentityUpdate from {name}: display_name={display_name}");
+                {
+                    let mut s = ipc_state.lock().unwrap();
+                    for p in &mut s.peers {
+                        if p.address.contains(&peer_ip) || p.name == name || p.name == _peer_name {
+                            p.display_name = display_name.clone();
+                        }
+                    }
+                }
+                if let Ok(mut cfg) = manguesechee_core::config::load() {
+                    for p in &mut cfg.peers {
+                        if p.address.as_deref().unwrap_or("").contains(&peer_ip) || p.id == peer_id || p.name.as_deref() == Some(&name) {
+                            p.display_name = Some(display_name.clone());
+                        }
+                    }
+                    let _ = manguesechee_core::config::save(&cfg);
+                }
             }
 
             Message::Ping    => { let _ = out_tx.try_send(Message::Pong); }

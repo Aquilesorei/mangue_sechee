@@ -165,7 +165,47 @@ if [[ -n "$TARGET_USER" && -n "$TARGET_UID" ]]; then
     fi
 fi
 
-# ── 8. Icon and Desktop Database ─────────────────────────────────────────────
+# ── 8. Desktop Autostart (UI & System Tray) ──────────────────────────────────
+
+echo "==> Configuring desktop autostart for UI and system tray…"
+mkdir -p /etc/xdg/autostart
+if [[ -f /usr/share/manguesechee/manguesechee-autostart.desktop ]]; then
+    cp -f /usr/share/manguesechee/manguesechee-autostart.desktop /etc/xdg/autostart/manguesechee-ui.desktop 2>/dev/null || true
+elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/manguesechee-autostart.desktop" ]]; then
+    cp -f "$(dirname "${BASH_SOURCE[0]}")/manguesechee-autostart.desktop" /etc/xdg/autostart/manguesechee-ui.desktop 2>/dev/null || true
+else
+    cat > /etc/xdg/autostart/manguesechee-ui.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Manguesechee Tray
+GenericName=Software KVM
+Comment=Manguesechee KVM system tray service
+Exec=manguesechee-ui --tray
+Icon=manguesechee
+Categories=Utility;System;
+Keywords=kvm;input;remote;keyboard;mouse;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+X-MATE-Autostart-Delay=2
+EOF
+fi
+chmod 644 /etc/xdg/autostart/manguesechee-ui.desktop 2>/dev/null || true
+
+# User-level autostart entry for the active desktop user (only if not already present)
+if [[ -n "$TARGET_USER" && -n "$TARGET_HOME" ]]; then
+    USER_AUTOSTART="$TARGET_HOME/.config/autostart"
+    mkdir -p "$USER_AUTOSTART"
+    if [[ ! -f "$USER_AUTOSTART/manguesechee-ui.desktop" ]]; then
+        cp -f /etc/xdg/autostart/manguesechee-ui.desktop "$USER_AUTOSTART/manguesechee-ui.desktop" 2>/dev/null || true
+        chown -R "$TARGET_USER:$TARGET_USER" "$USER_AUTOSTART/manguesechee-ui.desktop" 2>/dev/null || true
+        echo "    ✓ Desktop autostart configured (~/.config/autostart/manguesechee-ui.desktop)"
+    else
+        echo "    ✓ User autostart already exists at $USER_AUTOSTART/manguesechee-ui.desktop (preserved)"
+    fi
+fi
+
+# ── 9. Icon and Desktop Database ─────────────────────────────────────────────
 
 gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 update-desktop-database /usr/share/applications 2>/dev/null || true

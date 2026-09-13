@@ -153,7 +153,11 @@ impl ksni::Tray for ManguesecheeTray {
         let status_label = if !self.is_service_running {
             "Status: Service Stopped".into()
         } else if let Some(ref peer) = self.connected_to {
-            format!("Status: Forwarding → {peer}")
+            let friendly = self.peers.iter()
+                .find(|p| p.address == *peer || peer.contains(&p.address) || p.name == *peer)
+                .map(|p| p.effective_display_name())
+                .unwrap_or_else(|| manguesechee_core::names::clean_display_name("", peer));
+            format!("Status: Forwarding → {friendly}")
         } else {
             format!("Status: {}", self.status_text)
         };
@@ -176,7 +180,7 @@ impl ksni::Tray for ManguesecheeTray {
             let mut connect_items = Vec::new();
             for peer in &self.peers {
                 let addr = peer.address.clone();
-                let name = peer.name.clone();
+                let name = peer.effective_display_name();
                 connect_items.push(MenuItem::Standard(StandardItem {
                     label: format!("{name} ({addr})"),
                     activate: Box::new(move |_this: &mut Self| {

@@ -3028,6 +3028,7 @@ dependencies = [
  "bincode",
  "dirs",
  "libc",
+ "rand 0.8.8",
  "serde",
  "thiserror 2.0.20",
  "toml 0.8.23",

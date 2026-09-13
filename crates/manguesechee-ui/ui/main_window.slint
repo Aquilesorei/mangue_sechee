@@ -5,7 +5,7 @@ import { SetupWizard, ConnectingView } from "views/wizard.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { HeaderBar } from "components/header.slint";
 import { Snackbar } from "components/snackbar.slint";
-import { ManualConnectModal, ConfirmModal, PairingPinModal } from "components/dialogs.slint";
+import { ManualConnectModal, ConfirmModal, PairingPinModal, RenamePeerModal } from "components/dialogs.slint";
 import { PeersView } from "views/peers.slint";
 import { TopologyView } from "views/topology.slint";
 import { TransfersView } from "views/transfers.slint";
@@ -28,6 +28,7 @@ export component MainWindow inherits Window {
     in-out property <int>         active-tab:         0; // 0=Peers, 1=Topology, 2=Settings, 3=Logs, 4=Files
     in-out property <int>         wizard-page:        0;
     in-out property <string>      local-name:         "fedora";
+    in-out property <string>      local-display-name: "Quantum Toaster";
     in-out property <string>      local-ip:           "127.0.0.1";
     in-out property <string>      status:             "Ready";
     in-out property <bool>        is-service-running: true;
@@ -52,11 +53,12 @@ export component MainWindow inherits Window {
     callback dismiss-toast();
 
     // ── Modal Properties ────────────────────────────────────────────────────
-    in-out property <int>         active-modal:      0; // 0=None, 1=ManualConnect, 2=ConfirmUnpair, 3=PairingPin
+    in-out property <int>         active-modal:      0; // 0=None, 1=ManualConnect, 2=ConfirmUnpair, 3=PairingPin, 4=RenamePeer
     in-out property <string>      modal-target-addr: "";
     in-out property <string>      modal-title:       "";
     in-out property <string>      modal-message:     "";
     in-out property <string>      modal-pin-code:    "482 915";
+    in-out property <string>      modal-rename-name: "";
 
     // ── Wizard Properties ───────────────────────────────────────────────────
     in-out property <int>         wizard-role:  0;
@@ -65,6 +67,7 @@ export component MainWindow inherits Window {
 
     // ── Settings Properties ─────────────────────────────────────────────────
     in-out property <string>      setting-name:         "fedora";
+    in-out property <string>      setting-display-name: "Quantum Toaster";
     in-out property <int>         setting-role:         0; // 0=Both, 1=Controller, 2=Peer
     in-out property <string>      setting-port:         "24800";
     in-out property <bool>        setting-discovery:     true;
@@ -104,6 +107,8 @@ export component MainWindow inherits Window {
     callback forget-peer(string);
     callback update-peer-position(string, string);
     callback save-settings();
+    callback randomize-display-name();
+    callback rename-peer(string, string);
     callback auto-detect-screen();
     callback save-topology(string);
     callback save-topology-grid(string, int, int);
@@ -121,6 +126,7 @@ export component MainWindow inherits Window {
     // Modal actions
     callback open-connect-modal();
     callback open-unpair-modal(string);
+    callback open-rename-modal(string, string);
     callback close-modal();
     callback modal-connect-submitted(string, string);
     callback modal-confirm-submitted();
@@ -156,6 +162,7 @@ export component MainWindow inherits Window {
         Sidebar {
             active-tab <=> root.active-tab;
             local-name: root.local-name;
+            local-display-name: root.local-display-name;
             local-ip: root.local-ip;
             setting-port: root.setting-port;
             is-service-running: root.is-service-running;
@@ -204,6 +211,11 @@ export component MainWindow inherits Window {
                     dismiss-error => { root.dismiss-error(); }
                     open-connect-modal => { root.open-connect-modal(); }
                     open-unpair-modal(addr) => { root.open-unpair-modal(addr); }
+                    open-rename-modal(addr, cur_name) => {
+                        root.modal-target-addr = addr;
+                        root.modal-rename-name = cur_name;
+                        root.active-modal = 4;
+                    }
                     connect-requested(addr) => { root.connect-requested(addr); }
                     disconnect-requested => { root.disconnect-requested(); }
                     ping-peer(addr) => { root.ping-peer(addr); }
@@ -237,6 +249,7 @@ export component MainWindow inherits Window {
                 // TAB 2: SETTINGS
                 if root.active-tab == 2 : SettingsView {
                     setting-name <=> root.setting-name;
+                    setting-display-name <=> root.setting-display-name;
                     setting-role <=> root.setting-role;
                     setting-port <=> root.setting-port;
                     setting-discovery <=> root.setting-discovery;
@@ -261,6 +274,7 @@ export component MainWindow inherits Window {
                     auto-detect-screen => { root.auto-detect-screen(); }
                     save-settings => { root.save-settings(); }
                     theme-changed(idx) => { root.theme-changed(idx); }
+                    randomize-display-name => { root.randomize-display-name(); }
                 }
 
                 // TAB 3: LOGS CONSOLE
@@ -301,6 +315,17 @@ export component MainWindow inherits Window {
         pin-code: root.modal-pin-code;
         cancel => { root.close-modal(); }
         confirm => { root.modal-confirm-submitted(); }
+    }
+
+    if root.active-modal == 4 : RenamePeerModal {
+        address: root.modal-target-addr;
+        new-name-input <=> root.modal-rename-name;
+        randomize => { root.randomize-display-name(); }
+        cancel => { root.close-modal(); }
+        save(addr, new_name) => {
+            root.close-modal();
+            root.rename-peer(addr, new_name);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

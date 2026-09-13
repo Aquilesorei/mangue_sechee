@@ -3,6 +3,7 @@ import { Theme } from "../theme.slint";
 
 export component SettingsView inherits ScrollView {
     in-out property <string> setting-name: "fedora";
+    in-out property <string> setting-display-name: "Quantum Toaster";
     in-out property <int> setting-role: 0; // 0=Both, 1=Controller, 2=Peer
     in-out property <string> setting-port: "24800";
     in-out property <bool> setting-discovery: true;
@@ -29,6 +30,7 @@ export component SettingsView inherits ScrollView {
     callback auto-detect-screen();
     callback save-settings();
     callback theme-changed(int);
+    callback randomize-display-name();
 
     vertical-stretch: 1;
 
@@ -44,7 +46,21 @@ export component SettingsView inherits ScrollView {
 
                 HorizontalBox {
                     spacing: 10px;
-                    Text { text: "Device Name:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Display Name:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
+                    LineEdit {
+                        text <=> root.setting-display-name;
+                        placeholder-text: "e.g. Peach, Quantum Toaster, Sleepy Penguin…";
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: "🎲 Randomize";
+                        clicked => { root.randomize-display-name(); }
+                    }
+                }
+
+                HorizontalBox {
+                    spacing: 10px;
+                    Text { text: "System Hostname:"; width: 140px; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
                     LineEdit { text <=> root.setting-name; horizontal-stretch: 1; }
                 }
 

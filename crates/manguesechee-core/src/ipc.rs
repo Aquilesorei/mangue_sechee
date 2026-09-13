@@ -34,6 +34,8 @@ pub enum GuiCommand {
     SyncTopology { address: String, position: String },
     SyncTopologyGrid { address: String, grid_x: i32, grid_y: i32 },
     SetEdgeResistance { delay_ms: u32 },
+    SetDisplayName { display_name: String },
+    SetPeerDisplayName { address: String, display_name: String },
     Shutdown,
 }
 
@@ -42,6 +44,8 @@ pub enum GuiCommand {
 pub enum AgentEvent {
     Status {
         local_name:            String,
+        #[serde(default)]
+        local_display_name:    String,
         connected_to:          Option<String>,
         discovery:             bool,
         #[serde(default = "default_true")]
@@ -67,19 +71,24 @@ pub enum AgentEvent {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PeerInfo {
-    pub name:      String,
-    pub address:   String,
-    pub paired:    bool,
-    pub connected: bool,
-    pub position:  String,
+    pub name:         String,
     #[serde(default)]
-    pub grid_x:    i32,
+    pub display_name: String,
+    pub address:      String,
+    pub paired:       bool,
+    pub connected:    bool,
+    pub position:     String,
     #[serde(default)]
-    pub grid_y:    i32,
+    pub grid_x:       i32,
+    #[serde(default)]
+    pub grid_y:       i32,
 }
 
 impl PeerInfo {
     pub fn new(name: impl Into<String>, address: impl Into<String>, paired: bool, connected: bool, position: impl Into<String>) -> Self {
+        let n = name.into();
+        let addr = address.into();
+        let disp = crate::names::clean_display_name(&n, &addr);
         let pos = position.into();
         let (gx, gy) = match pos.to_lowercase().as_str() {
             "left" => (-1, 0),
@@ -89,13 +98,29 @@ impl PeerInfo {
             _ => (1, 0),
         };
         Self {
-            name: name.into(),
-            address: address.into(),
+            name: n,
+            display_name: disp,
+            address: addr,
             paired,
             connected,
             position: pos,
             grid_x: gx,
             grid_y: gy,
+        }
+    }
+
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = display_name.into();
+        self
+    }
+
+    pub fn effective_display_name(&self) -> String {
+        if !self.display_name.trim().is_empty() && !crate::names::is_raw_uuid(&self.display_name) {
+            self.display_name.clone()
+        } else if !self.name.trim().is_empty() && !crate::names::is_raw_uuid(&self.name) {
+            self.name.clone()
+        } else {
+            crate::names::name_from_id(&self.address)
         }
     }
 }

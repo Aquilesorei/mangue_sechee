@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let opts = parse_args(&args, &cfg);
 
     let local_name = cfg.device.name.clone();
+    let local_display_name = cfg.device.display_name.clone();
     let local_id = if cfg.device.id.trim().is_empty() {
         let new_id = Uuid::new_v4().to_string();
         let mut updated = cfg.clone();
@@ -53,10 +54,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     info!(
-        name   = %local_name,
-        id     = %local_id,
-        port   = opts.port,
-        screen = format!("{}×{}", opts.screen_width, opts.screen_height),
+        name    = %local_name,
+        display = %local_display_name,
+        id      = %local_id,
+        port    = opts.port,
+        screen  = format!("{}×{}", opts.screen_width, opts.screen_height),
         "manguesechee-agent starting"
     );
 
@@ -68,8 +70,10 @@ async fn main() -> anyhow::Result<()> {
         p.address.as_ref().map(|addr| {
             let is_paired = known_store.contains(&p.id);
             let (gx, gy) = p.coordinates();
+            let disp = p.effective_display_name();
             manguesechee_core::ipc::PeerInfo {
                 name: p.id.clone(),
+                display_name: disp,
                 address: addr.clone(),
                 paired: is_paired,
                 connected: false,
@@ -83,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     let ipc_state: ipc_server::SharedState = Arc::new(std::sync::Mutex::new(
         ipc_server::AgentState {
             local_name:            local_name.clone(),
+            local_display_name:    local_display_name.clone(),
             discovery:             cfg.network.discovery,
             file_transfer_enabled: cfg.clipboard.files_enabled,
             tls_enabled:           cfg.network.tls,
@@ -108,10 +113,12 @@ async fn main() -> anyhow::Result<()> {
     {
         let name = local_name.clone();
         let id   = local_id.clone();
+        let disp = local_display_name.clone();
         let port = opts.port;
         let state = Arc::clone(&ipc_state);
+        let b_tx = broadcast_tx.clone();
         tokio::spawn(async move {
-            discovery::run(name, id, port, state).await;
+            discovery::run(name, id, disp, port, state, b_tx).await;
         });
     }
 
@@ -124,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let name   = local_name.clone();
         let id     = local_id.clone();
+        let disp   = local_display_name.clone();
         let mouse  = opts.mouse_path.clone();
         let kb     = opts.keyboard_path.clone();
         let w      = opts.screen_width;
@@ -148,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let name = name.clone();
                 let id = id.clone();
+                let disp = disp.clone();
                 let mouse = mouse.clone();
                 let kb = kb.clone();
                 let state = Arc::clone(&state);
@@ -156,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
                 info!("Starting controller connection to {addr}");
 
                 tokio::spawn(async move {
-                    if let Err(e) = client::connect_to(&addr, name, id, mouse, kb, w, h, deadzone, delay, velocity, Arc::clone(&state), b_tx).await {
+                    if let Err(e) = client::connect_to(&addr, name, id, disp, mouse, kb, w, h, deadzone, delay, velocity, Arc::clone(&state), b_tx).await {
                         tracing::error!("controller session to {addr} failed: {e:#}");
                         state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
                     }
@@ -186,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
         listener,
         local_name,
         local_id,
+        local_display_name,
         opts.screen_width,
         opts.screen_height,
         opts.port,

@@ -4,6 +4,7 @@ import { Theme } from "../theme.slint";
 export component Sidebar inherits Rectangle {
     in-out property <int> active-tab: 0;
     in property <string> local-name: "";
+    in property <string> local-display-name: "";
     in property <string> local-ip: "";
     in property <string> setting-port: "24800";
     in property <bool> is-service-running: true;
@@ -265,7 +266,7 @@ export component Sidebar inherits Rectangle {
                 HorizontalBox {
                     Text { text: "Device:"; font-size: 11px; color: Theme.text-muted; }
                     Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.local-name; font-size: 12px; font-weight: 600; color: Theme.text-primary; overflow: elide; }
+                    Text { text: root.local-display-name != "" ? root.local-display-name : root.local-name; font-size: 12px; font-weight: 600; color: Theme.text-primary; overflow: elide; }
                 }
                 HorizontalBox {
                     Text { text: "LAN IP:"; font-size: 11px; color: Theme.text-muted; }

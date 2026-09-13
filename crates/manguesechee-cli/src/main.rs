@@ -313,15 +313,29 @@ fn print_status(json: bool, waybar: bool) -> Result<()> {
         let ev = query_status().ok();
         if let Some(AgentEvent::Status {
             ref local_name,
+            ref local_display_name,
             ref connected_to,
             cursor_locked,
             tls_active,
+            ref peers,
             ..
         }) = ev
         {
+            let disp = if !local_display_name.is_empty() {
+                local_display_name
+            } else {
+                local_name
+            };
+            let peer_disp = connected_to.as_ref().map(|p| {
+                peers.iter()
+                    .find(|item| item.address == *p || p.contains(&item.address))
+                    .map(|item| item.effective_display_name())
+                    .unwrap_or_else(|| manguesechee_core::names::clean_display_name("", p))
+            });
+
             let (text, class) = if cursor_locked {
                 (" Locked".to_string(), "locked")
-            } else if let Some(ref p) = connected_to {
+            } else if let Some(ref p) = peer_disp {
                 (format!(" ➔ {p}"), "forwarding")
             } else {
                 (" Ready".to_string(), "ready")
@@ -329,8 +343,8 @@ fn print_status(json: bool, waybar: bool) -> Result<()> {
 
             let tooltip = format!(
                 "Manguesechee KVM\nDevice: {}\nStatus: {}\nCursor: {}\nTLS: {}",
-                local_name,
-                connected_to.as_deref().unwrap_or("Ready (local)"),
+                disp,
+                peer_disp.as_deref().unwrap_or("Ready (local)"),
                 if cursor_locked { "Locked" } else { "Unlocked" },
                 if tls_active { "Active (TLS 1.3)" } else { "Disabled" }
             );
@@ -396,6 +410,7 @@ fn print_status(json: bool, waybar: bool) -> Result<()> {
     match query_status()? {
         AgentEvent::Status {
             local_name,
+            local_display_name,
             connected_to,
             discovery,
             file_transfer_enabled,
@@ -409,11 +424,20 @@ fn print_status(json: bool, waybar: bool) -> Result<()> {
             transfer_history,
             ..
         } => {
-            println!("  Device Name: {local_name}");
+            let self_display = if !local_display_name.is_empty() {
+                format!("{local_display_name} ({local_name})")
+            } else {
+                local_name.clone()
+            };
+            println!("  Device Name: {self_display}");
             println!(
                 "  Connection:  {}",
                 if let Some(ref p) = connected_to {
-                    format!("🟢 Forwarding input to {p}")
+                    let peer_disp = peers.iter()
+                        .find(|item| item.address == *p || p.contains(&item.address))
+                        .map(|item| item.effective_display_name())
+                        .unwrap_or_else(|| manguesechee_core::names::clean_display_name("", p));
+                    format!("🟢 Forwarding input to {peer_disp} ({p})")
                 } else {
                     "⚪ Ready (Local control)".into()
                 }
@@ -499,8 +523,8 @@ fn print_status(json: bool, waybar: bool) -> Result<()> {
                         "⚪ Discovered"
                     };
                     println!(
-                        "    • {:<16} {:<22} {:<14} Grid: ({:>2}, {:>2}) [{}]",
-                        p.name, p.address, status_bullet, p.grid_x, p.grid_y, p.position
+                        "    • {:<20} {:<22} {:<14} Grid: ({:>2}, {:>2}) [{}]",
+                        p.effective_display_name(), p.address, status_bullet, p.grid_x, p.grid_y, p.position
                     );
                 }
             }
@@ -522,10 +546,14 @@ fn cmd_connect(target: &str) -> Result<()> {
 
     let mut addr = clean.to_string();
 
-    // Check if target matches any discovered peer name
+    // Check if target matches any discovered peer name or display name
     if let Ok(AgentEvent::Status { peers, .. }) = query_status() {
-        if let Some(p) = peers.iter().find(|p| p.name.eq_ignore_ascii_case(clean)) {
-            println!("Resolved peer '{}' → {}", p.name, p.address);
+        if let Some(p) = peers.iter().find(|p| {
+            p.name.eq_ignore_ascii_case(clean)
+                || p.display_name.eq_ignore_ascii_case(clean)
+                || p.effective_display_name().eq_ignore_ascii_case(clean)
+        }) {
+            println!("Resolved peer '{}' → {}", p.effective_display_name(), p.address);
             addr = p.address.clone();
         }
     }
@@ -625,12 +653,12 @@ fn cmd_peers(json: bool) -> Result<()> {
         }
 
         println!("PEERS ({} discovered / configured):", peers.len());
-        println!("-------------------------------------------------------------------------");
+        println!("----------------------------------------------------------------------------------");
         println!(
-            "{:<16} {:<22} {:<12} {:<12} {:<8}",
+            "{:<20} {:<22} {:<12} {:<12} {:<8}",
             "NAME", "ADDRESS", "STATUS", "GRID", "POSITION"
         );
-        println!("-------------------------------------------------------------------------");
+        println!("----------------------------------------------------------------------------------");
         for p in &peers {
             let status = if p.connected {
                 "Connected"
@@ -640,11 +668,11 @@ fn cmd_peers(json: bool) -> Result<()> {
                 "Discovered"
             };
             println!(
-                "{:<16} {:<22} {:<12} ({:>2}, {:>2})   {:<8}",
-                p.name, p.address, status, p.grid_x, p.grid_y, p.position
+                "{:<20} {:<22} {:<12} ({:>2}, {:>2})   {:<8}",
+                p.effective_display_name(), p.address, status, p.grid_x, p.grid_y, p.position
             );
         }
-        println!("-------------------------------------------------------------------------");
+        println!("----------------------------------------------------------------------------------");
     } else {
         bail!("Could not retrieve peers list.");
     }

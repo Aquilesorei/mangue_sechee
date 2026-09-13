@@ -322,6 +322,7 @@ mod tests {
         let peers = vec![
             crate::ipc::PeerInfo {
                 name: "Laptop-Right1".into(),
+                display_name: "Sleepy Penguin".into(),
                 address: "192.168.1.11:24800".into(),
                 paired: true,
                 connected: true,
@@ -331,6 +332,7 @@ mod tests {
             },
             crate::ipc::PeerInfo {
                 name: "Laptop-Right2".into(),
+                display_name: "Angry Potato".into(),
                 address: "192.168.1.12:24800".into(),
                 paired: true,
                 connected: true,
@@ -340,6 +342,7 @@ mod tests {
             },
             crate::ipc::PeerInfo {
                 name: "Laptop-Left".into(),
+                display_name: "Peach".into(),
                 address: "192.168.1.13:24800".into(),
                 paired: true,
                 connected: true,
@@ -349,6 +352,7 @@ mod tests {
             },
             crate::ipc::PeerInfo {
                 name: "Laptop-Top".into(),
+                display_name: "Quantum Toaster".into(),
                 address: "192.168.1.14:24800".into(),
                 paired: true,
                 connected: true,
@@ -358,6 +362,7 @@ mod tests {
             },
             crate::ipc::PeerInfo {
                 name: "Laptop-Bottom".into(),
+                display_name: "Tiny Dragon".into(),
                 address: "192.168.1.15:24800".into(),
                 paired: true,
                 connected: true,

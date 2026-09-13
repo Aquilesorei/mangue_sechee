@@ -13,11 +13,12 @@ const SERVICE_TYPE: &str = "_manguesechee._tcp.local.";
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredPeer {
-    pub name:    String,
-    pub id:      String,
-    pub address: String,   // host:port
-    pub port:    u16,
-    pub ip:      IpAddr,
+    pub name:         String,
+    pub display_name: String,
+    pub id:           String,
+    pub address:      String,   // host:port
+    pub port:         u16,
+    pub ip:           IpAddr,
 }
 
 /// Advertise this agent on the LAN and browse for peers.
@@ -33,6 +34,7 @@ impl Discovery {
     pub fn new(
         instance_name: &str,  // e.g. device name
         peer_id:       &str,
+        display_name:  &str,
         port:          u16,
     ) -> anyhow::Result<Self> {
         let mdns = ServiceDaemon::new().context("start mDNS daemon")?;
@@ -40,6 +42,7 @@ impl Discovery {
         // ── Advertise ──────────────────────────────────────────────────────────
         let mut props = HashMap::new();
         props.insert("id".to_string(), peer_id.to_string());
+        props.insert("display_name".to_string(), display_name.to_string());
 
         let service = ServiceInfo::new(
             SERVICE_TYPE,
@@ -51,13 +54,39 @@ impl Discovery {
         ).context("create ServiceInfo")?;
 
         mdns.register(service).context("mDNS register")?;
-        info!("mDNS: advertising as '{instance_name}' on port {port}");
+        info!("mDNS: advertising as '{instance_name}' ({display_name}) on port {port}");
 
         // ── Browse ─────────────────────────────────────────────────────────────
         let receiver = mdns.browse(SERVICE_TYPE).context("mDNS browse")?;
         info!("mDNS: browsing for peers on '{SERVICE_TYPE}'");
 
         Ok(Self { mdns, receiver })
+    }
+
+    /// Dynamically update the advertised display name on the LAN.
+    pub fn update_display_name(
+        &self,
+        instance_name: &str,
+        peer_id: &str,
+        new_display_name: &str,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        let mut props = HashMap::new();
+        props.insert("id".to_string(), peer_id.to_string());
+        props.insert("display_name".to_string(), new_display_name.to_string());
+
+        let service = ServiceInfo::new(
+            SERVICE_TYPE,
+            instance_name,
+            &format!("{instance_name}.local."),
+            (),
+            port,
+            Some(props),
+        ).context("create ServiceInfo for display_name update")?;
+
+        self.mdns.register(service).context("update mDNS display_name")?;
+        info!("mDNS: re-advertised as '{instance_name}' with negotiated display name '{new_display_name}'");
+        Ok(())
     }
 
     /// Process pending mDNS events and return any newly discovered peers.
@@ -72,16 +101,22 @@ impl Discovery {
                         .get("id")
                         .map(|p| p.val_str().to_string())
                         .unwrap_or_default();
+                    let display_name = info.get_properties()
+                        .get("display_name")
+                        .map(|p| p.val_str().to_string())
+                        .filter(|d| !d.trim().is_empty() && !manguesechee_core::names::is_raw_uuid(d))
+                        .unwrap_or_else(|| manguesechee_core::names::name_from_id(&id));
                     let port = info.get_port();
 
                     for addr in info.get_addresses() {
-                        info!("mDNS: discovered peer '{name}' at {addr}:{port}");
+                        info!("mDNS: discovered peer '{display_name}' ({name}) at {addr}:{port}");
                         peers.push(DiscoveredPeer {
-                            name:    info.get_hostname().trim_end_matches('.').to_string(),
-                            id:      id.clone(),
-                            address: format!("{addr}:{port}"),
+                            name:         info.get_hostname().trim_end_matches('.').to_string(),
+                            display_name: display_name.clone(),
+                            id:           id.clone(),
+                            address:      format!("{addr}:{port}"),
                             port,
-                            ip:      *addr,
+                            ip:           *addr,
                         });
                     }
                 }
