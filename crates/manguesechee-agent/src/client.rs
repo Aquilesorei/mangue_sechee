@@ -116,6 +116,7 @@ pub async fn connect_to(
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     let mut known = load_known_peers().unwrap_or_default();
+    let mut initial_session_msg = None;
     if !known.contains(&peer_id) {
         let code = generate_code();
         show_outgoing_code(&peer_name, &code);
@@ -133,6 +134,18 @@ pub async fn connect_to(
                 save_known_peers(&known)?;
             }
             Message::PairRejected { reason } => anyhow::bail!("pairing rejected: {reason}"),
+            session_msg @ (Message::FileTransferStatus { .. }
+                | Message::ClipboardSync { .. }
+                | Message::InputEvent(_)
+                | Message::EdgeCrossed { .. }
+                | Message::TopologySync { .. }
+                | Message::ReturnControl { .. }
+                | Message::Ping) => {
+                info!("peer '{peer_name}' ({peer_id}) already has us paired; auto-trusting peer");
+                known.add(peer_id.clone(), peer_name.clone());
+                let _ = save_known_peers(&known);
+                initial_session_msg = Some(session_msg);
+            }
             other => anyhow::bail!("expected PairAccepted/Rejected, got {other:?}"),
         }
     } else {
@@ -334,10 +347,19 @@ pub async fn connect_to(
     let grab_mouse_cleanup = grab_mouse_tx.clone();
     let grab_keyboard_cleanup = grab_keyboard_tx.clone();
     let inbound_tx_task = inbound_tx.clone();
+    let mut pending_first_msg = initial_session_msg;
     tokio::spawn(async move {
         let mut file_receiver = crate::file_transfer::FileReceiver::default();
         loop {
-            match receiver.receive().await {
+            let res = if let Some(m) = pending_first_msg.take() {
+                Ok(m)
+            } else {
+                receiver.receive().await
+            };
+            match res {
+                Ok(Message::PairAccepted { name, .. }) => {
+                    info!("← PairAccepted received from peer '{name}'");
+                }
                 Ok(Message::FileTransferStatus { enabled }) => {
                     info!("← peer updated FileTransferStatus: enabled={enabled}");
                     peer_files_recv.store(enabled, std::sync::atomic::Ordering::SeqCst);

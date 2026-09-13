@@ -15,7 +15,7 @@ set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 NAME="manguesechee"
 DESCRIPTION="Software KVM for Linux — control multiple machines with one keyboard and mouse"
 MAINTAINER="Manguesechee contributors"

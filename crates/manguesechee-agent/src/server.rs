@@ -152,7 +152,13 @@ async fn handle(
                 }
             }
             // Peer already considers us paired (e.g. client reconnected or configured on peer side)
-            active_msg @ (Message::InputEvent(_) | Message::EdgeCrossed { .. } | Message::Ping | Message::ClipboardSync { .. }) => {
+            active_msg @ (Message::InputEvent(_)
+                | Message::EdgeCrossed { .. }
+                | Message::Ping
+                | Message::ClipboardSync { .. }
+                | Message::FileTransferStatus { .. }
+                | Message::TopologySync { .. }
+                | Message::ReturnControl { .. }) => {
                 info!("peer '{_peer_name}' ({peer_id}) already paired from remote; auto-trusting peer");
                 known.add(peer_id.clone(), _peer_name.clone());
                 let _ = save_known_peers(&known);
