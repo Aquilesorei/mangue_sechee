@@ -32,181 +32,12 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-    clipboard::ensure_display_env();
-
-    let cfg  = config::ensure_default().context("load config")?;
-    let args: Vec<String> = std::env::args().collect();
-    let opts = parse_args(&args, &cfg);
-
-    let local_name = cfg.device.name.clone();
-    let local_display_name = cfg.device.display_name.clone();
-    let local_id = if cfg.device.id.trim().is_empty() {
-        let new_id = Uuid::new_v4().to_string();
-        let mut updated = cfg.clone();
-        updated.device.id = new_id.clone();
-        let _ = config::save(&updated);
-        new_id
-    } else {
-        cfg.device.id.clone()
-    };
-
-    info!(
-        name    = %local_name,
-        display = %local_display_name,
-        id      = %local_id,
-        port    = opts.port,
-        screen  = format!("{}×{}", opts.screen_width, opts.screen_height),
-        "manguesechee-agent starting"
-    );
-
-    // ── IPC — PID file + Unix socket ─────────────────────────────────────────────
-    let _pid_guard = ipc_server::PidGuard::write().context("write PID file")?;
-
-    let known_store = session::load_known_peers().unwrap_or_default();
-    let initial_peers: Vec<manguesechee_core::ipc::PeerInfo> = cfg.peers.iter().filter_map(|p| {
-        p.address.as_ref().map(|addr| {
-            let is_paired = known_store.contains(&p.id);
-            let (gx, gy) = p.coordinates();
-            let disp = p.effective_display_name();
-            manguesechee_core::ipc::PeerInfo {
-                name: p.id.clone(),
-                display_name: disp,
-                address: addr.clone(),
-                paired: is_paired,
-                connected: false,
-                position: p.position.clone(),
-                grid_x: gx,
-                grid_y: gy,
-            }
-        })
-    }).collect();
-
-    let ipc_state: ipc_server::SharedState = Arc::new(std::sync::Mutex::new(
-        ipc_server::AgentState {
-            local_name:            local_name.clone(),
-            local_display_name:    local_display_name.clone(),
-            discovery:             cfg.network.discovery,
-            file_transfer_enabled: cfg.clipboard.files_enabled,
-            tls_enabled:           cfg.network.tls,
-            peers:                 initial_peers,
-            ..Default::default()
-        }
-    ));
-    let (connect_tx, mut connect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<manguesechee_core::protocol::Message>(16);
-
-    {
-        let state = Arc::clone(&ipc_state);
-        let ctx = connect_tx.clone();
-        let b_tx = broadcast_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = ipc_server::run(state, ctx, b_tx).await {
-                tracing::error!("IPC server: {e:#}");
-            }
-        });
-    }
-
-    // ── mDNS discovery (background) ───────────────────────────────────────────
-    {
-        let name = local_name.clone();
-        let id   = local_id.clone();
-        let disp = local_display_name.clone();
-        let port = opts.port;
-        let state = Arc::clone(&ipc_state);
-        let b_tx = broadcast_tx.clone();
-        tokio::spawn(async move {
-            discovery::run(name, id, disp, port, state, b_tx).await;
-        });
-    }
-
-    // ── TCP listener ──────────────────────────────────────────────────────────
-    let listener = manguesechee_network::listen(opts.port)
-        .await
-        .context("failed to start listener")?;
-
-    // ── Outbound controller session worker ───────────────────────────────────
-    {
-        let name   = local_name.clone();
-        let id     = local_id.clone();
-        let disp   = local_display_name.clone();
-        let mouse  = opts.mouse_path.clone();
-        let kb     = opts.keyboard_path.clone();
-        let w      = opts.screen_width;
-        let h      = opts.screen_height;
-        let deadzone = cfg.input.corner_deadzone_px;
-        let delay    = cfg.input.switch_delay_ms;
-        let velocity = cfg.input.edge_velocity_threshold;
-        let state  = Arc::clone(&ipc_state);
-        let b_tx   = broadcast_tx.clone();
-        let connect_tx_retry = connect_tx.clone();
-
-        tokio::spawn(async move {
-            while let Some(addr) = connect_rx.recv().await {
-                {
-                    let mut s = state.lock().unwrap();
-                    if s.connected_to.as_deref() == Some(&addr) {
-                        info!("already connected or connecting to {addr} — skipping duplicate connect");
-                        continue;
-                    }
-                    s.connected_to = Some(addr.clone());
-                    s.disconnect_requested = false;
-                }
-                let name = name.clone();
-                let id = id.clone();
-                let disp = disp.clone();
-                let mouse = mouse.clone();
-                let kb = kb.clone();
-                let state = Arc::clone(&state);
-                let b_tx = b_tx.clone();
-                let retry_tx = connect_tx_retry.clone();
-                info!("Starting controller connection to {addr}");
-
-                tokio::spawn(async move {
-                    if let Err(e) = client::connect_to(&addr, name, id, disp, mouse, kb, w, h, deadzone, delay, velocity, Arc::clone(&state), b_tx).await {
-                        tracing::error!("controller session to {addr} failed: {e:#}");
-                        state.lock().unwrap().last_error = Some(format!("Connection to {addr} failed: {e}"));
-                    }
-                    state.lock().unwrap().connected_to = None;
-
-                    // If still configured in peers, and disconnect wasn't explicitly requested, retry after 3 seconds
-                    let should_retry = {
-                        let s = state.lock().unwrap();
-                        !s.disconnect_requested && s.peers.iter().any(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(&addr))
-                    };
-                    if should_retry {
-                        info!("will retry controller connection to {addr} in 3 seconds…");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                        let _ = retry_tx.send(addr);
-                    }
-                });
-            }
-        });
-    }
-
-    // Connect if --connect or config peer was specified at launch
-    if let Some(addr) = opts.peer_addr {
-        let _ = connect_tx.send(addr);
-    }
-
-    server::run(
-        listener,
-        local_name,
-        local_id,
-        local_display_name,
-        opts.screen_width,
-        opts.screen_height,
-        opts.port,
-        Arc::clone(&ipc_state),
-        connect_tx.clone(),
-        broadcast_tx.clone(),
-    ).await;
-    Ok(())
+#[derive(Debug, Clone)]
+struct AgentIdentity {
+    name: String,
+    id: String,
+    display_name: String,
 }
-
-// ── CLI ───────────────────────────────────────────────────────────────────────
 
 struct Opts {
     port:          u16,
@@ -216,6 +47,87 @@ struct Opts {
     screen_width:  u32,
     screen_height: u32,
 }
+
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    clipboard::ensure_display_env();
+
+    let cfg = config::ensure_default().context("load config")?;
+    let args: Vec<String> = std::env::args().collect();
+    let opts = parse_args(&args, &cfg);
+
+    let identity = resolve_identity(&cfg);
+
+    info!(
+        name    = %identity.name,
+        display = %identity.display_name,
+        id      = %identity.id,
+        port    = opts.port,
+        screen  = format!("{}×{}", opts.screen_width, opts.screen_height),
+        "manguesechee-agent starting"
+    );
+
+    let _pid_guard = ipc_server::PidGuard::write().context("write PID file")?;
+
+    let known_store = session::load_known_peers().unwrap_or_default();
+    let initial_peers = build_initial_peers(&cfg, &known_store);
+
+    let ipc_state: ipc_server::SharedState = Arc::new(std::sync::Mutex::new(
+        ipc_server::AgentState {
+            local_name:            identity.name.clone(),
+            local_display_name:    identity.display_name.clone(),
+            discovery:             cfg.network.discovery,
+            file_transfer_enabled: cfg.clipboard.files_enabled,
+            tls_enabled:           cfg.network.tls,
+            peers:                 initial_peers,
+            ..Default::default()
+        }
+    ));
+
+    let (connect_tx, connect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<manguesechee_core::protocol::Message>(16);
+
+    spawn_ipc_server(Arc::clone(&ipc_state), connect_tx.clone(), broadcast_tx.clone());
+    spawn_discovery(identity.clone(), opts.port, Arc::clone(&ipc_state), broadcast_tx.clone());
+
+   
+    let listener = manguesechee_network::listen(opts.port)
+        .await
+        .context("failed to start listener")?;
+
+    spawn_connect_manager(
+        identity.clone(),
+        &opts,
+        &cfg,
+        Arc::clone(&ipc_state),
+        broadcast_tx.clone(),
+        connect_rx,
+        connect_tx.clone(),
+    );
+
+    // Connect if --connect or config peer was specified at launch
+    if let Some(addr) = opts.peer_addr {
+        let _ = connect_tx.send(addr);
+    }
+
+    server::run(
+        listener,
+        identity.name,
+        identity.id,
+        identity.display_name,
+        opts.screen_width,
+        opts.screen_height,
+        opts.port,
+        Arc::clone(&ipc_state),
+        connect_tx,
+        broadcast_tx,
+    ).await;
+
+    Ok(())
+}
+
 
 fn parse_args(args: &[String], cfg: &config::Config) -> Opts {
     let mut port          = cfg.network.port;
@@ -267,4 +179,159 @@ fn parse_args(args: &[String], cfg: &config::Config) -> Opts {
     });
 
     Opts { port, peer_addr, mouse_path, keyboard_path, screen_width, screen_height }
+}
+
+
+fn resolve_identity(cfg: &config::Config) -> AgentIdentity {
+    let id = if cfg.device.id.trim().is_empty() {
+        let new_id = Uuid::new_v4().to_string();
+        let mut updated = cfg.clone();
+        updated.device.id = new_id.clone();
+        let _ = config::save(&updated);
+        new_id
+    } else {
+        cfg.device.id.clone()
+    };
+
+    AgentIdentity {
+        name: cfg.device.name.clone(),
+        id,
+        display_name: cfg.device.display_name.clone(),
+    }
+}
+
+fn build_initial_peers(
+    cfg: &config::Config,
+    known: &session::KnownPeers,
+) -> Vec<manguesechee_core::ipc::PeerInfo> {
+    cfg.peers
+        .iter()
+        .filter_map(|p| {
+            p.address.as_ref().map(|addr| {
+                let is_paired = known.contains(&p.id);
+                let (gx, gy) = p.coordinates();
+                let disp = p.effective_display_name();
+                manguesechee_core::ipc::PeerInfo {
+                    name: p.id.clone(),
+                    display_name: disp,
+                    address: addr.clone(),
+                    paired: is_paired,
+                    connected: false,
+                    position: p.position.clone(),
+                    grid_x: gx,
+                    grid_y: gy,
+                }
+            })
+        })
+        .collect()
+}
+
+fn spawn_ipc_server(
+    state: ipc_server::SharedState,
+    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    broadcast_tx: tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = ipc_server::run(state, connect_tx, broadcast_tx).await {
+            tracing::error!("IPC server: {e:#}");
+        }
+    });
+}
+
+fn spawn_discovery(
+    identity: AgentIdentity,
+    port: u16,
+    state: ipc_server::SharedState,
+    broadcast_tx: tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
+) {
+    tokio::spawn(async move {
+        discovery::run(
+            identity.name,
+            identity.id,
+            identity.display_name,
+            port,
+            state,
+            broadcast_tx,
+        )
+            .await;
+    });
+}
+
+fn spawn_connect_manager(
+    identity: AgentIdentity,
+    opts: &Opts,
+    cfg: &config::Config,
+    state: ipc_server::SharedState,
+    broadcast_tx: tokio::sync::broadcast::Sender<manguesechee_core::protocol::Message>,
+    mut connect_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    connect_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let mouse = opts.mouse_path.clone();
+    let kb = opts.keyboard_path.clone();
+    let w = opts.screen_width;
+    let h = opts.screen_height;
+    let deadzone = cfg.input.corner_deadzone_px;
+    let delay = cfg.input.switch_delay_ms;
+    let velocity = cfg.input.edge_velocity_threshold;
+
+    tokio::spawn(async move {
+        while let Some(addr) = connect_rx.recv().await {
+            {
+                let mut s = state.lock().unwrap();
+                if s.connected_to.as_deref() == Some(&addr) {
+                    info!("already connected or connecting to {addr} — skipping duplicate connect");
+                    continue;
+                }
+                s.connected_to = Some(addr.clone());
+                s.disconnect_requested = false;
+            }
+
+            let ident = identity.clone();
+            let mouse = mouse.clone();
+            let kb = kb.clone();
+            let state = Arc::clone(&state);
+            let b_tx = broadcast_tx.clone();
+            let retry_tx = connect_tx.clone();
+            info!("Starting controller connection to {addr}");
+
+            tokio::spawn(async move {
+                if let Err(e) = client::connect_to(
+                    &addr,
+                    ident.name,
+                    ident.id,
+                    ident.display_name,
+                    mouse,
+                    kb,
+                    w,
+                    h,
+                    deadzone,
+                    delay,
+                    velocity,
+                    Arc::clone(&state),
+                    b_tx,
+                )
+                    .await
+                {
+                    tracing::error!("controller session to {addr} failed: {e:#}");
+                    state.lock().unwrap().last_error =
+                        Some(format!("Connection to {addr} failed: {e}"));
+                }
+                state.lock().unwrap().connected_to = None;
+
+                // If still configured in peers, and disconnect wasn't explicitly requested, retry after 3 seconds
+                let should_retry = {
+                    let s = state.lock().unwrap();
+                    !s.disconnect_requested
+                        && s.peers
+                        .iter()
+                        .any(|p| p.address == addr || addr.contains(&p.address) || p.address.contains(&addr))
+                };
+                if should_retry {
+                    info!("will retry controller connection to {addr} in 3 seconds…");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    let _ = retry_tx.send(addr);
+                }
+            });
+        }
+    });
 }

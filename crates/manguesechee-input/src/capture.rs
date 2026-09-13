@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::info;
 
-// ── MouseCapture ──────────────────────────────────────────────────────────────
 
 pub struct MouseCapture {
     stream:               evdev::EventStream,
@@ -497,7 +496,6 @@ impl Drop for MouseCapture {
     }
 }
 
-// ── KeyboardCapture ───────────────────────────────────────────────────────────
 
 pub struct KeyboardCapture {
     stream:     evdev::EventStream,
@@ -569,7 +567,6 @@ fn is_mouse_button(key: Key) -> bool {
     (0x110..=0x11f).contains(&key.code())
 }
 
-// ── Device discovery ──────────────────────────────────────────────────────────
 
 fn is_ignored_device(name: &str) -> bool {
     let lower = name.to_lowercase();

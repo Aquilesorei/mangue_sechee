@@ -23,7 +23,6 @@ export component MainWindow inherits Window {
     preferred-height: 660px;
     background: Theme.app-bg;
 
-    // ── Application State ───────────────────────────────────────────────────
     in-out property <AppView>     view:               AppView.Main;
     in-out property <int>         active-tab:         0; // 0=Peers, 1=Topology, 2=Settings, 3=Logs, 4=Files
     in-out property <int>         wizard-page:        0;
@@ -46,13 +45,11 @@ export component MainWindow inherits Window {
     in-out property <bool>        is-dark <=> Theme.is-dark;
     callback dismiss-error();
 
-    // ── Toast & Snackbar Properties ─────────────────────────────────────────
     in-out property <bool>        toast-visible:  false;
     in-out property <string>      toast-text:     "";
     in-out property <bool>        toast-is-error: false;
     callback dismiss-toast();
 
-    // ── Modal Properties ────────────────────────────────────────────────────
     in-out property <int>         active-modal:      0; // 0=None, 1=ManualConnect, 2=ConfirmUnpair, 3=PairingPin, 4=RenamePeer
     in-out property <string>      modal-target-addr: "";
     in-out property <string>      modal-title:       "";
@@ -60,12 +57,10 @@ export component MainWindow inherits Window {
     in-out property <string>      modal-pin-code:    "482 915";
     in-out property <string>      modal-rename-name: "";
 
-    // ── Wizard Properties ───────────────────────────────────────────────────
     in-out property <int>         wizard-role:  0;
     in-out property <string>      wizard-addr:  "";
     in-out property <string>      wizard-side:  "right";
 
-    // ── Settings Properties ─────────────────────────────────────────────────
     in-out property <string>      setting-name:         "fedora";
     in-out property <string>      setting-display-name: "Quantum Toaster";
     in-out property <int>         setting-role:         0; // 0=Both, 1=Controller, 2=Peer
@@ -89,11 +84,9 @@ export component MainWindow inherits Window {
     in-out property <string>      settings-feedback:     "";
     in-out property <string>      logs-feedback:         "";
 
-    // ── Logs Filter Properties ──────────────────────────────────────────────
     in-out property <int>         log-level-filter:     0; // 0=All, 1=Errors, 2=Warnings, 3=Info
     in-out property <string>      log-filter:           "";
 
-    // ── Callbacks ───────────────────────────────────────────────────────────
     callback tab-selected(int);
     callback connect-requested(string);
     callback disconnect-requested();
@@ -158,7 +151,6 @@ export component MainWindow inherits Window {
     if view == AppView.Main : HorizontalBox {
         padding: 0px; spacing: 0px;
 
-        // ── Sidebar Navigation ──────────────────────────────────────────────
         Sidebar {
             active-tab <=> root.active-tab;
             local-name: root.local-name;
@@ -170,7 +162,6 @@ export component MainWindow inherits Window {
             toggle-theme => { root.toggle-theme(); }
         }
 
-        // ── Main Content Body ───────────────────────────────────────────────
         Rectangle {
             horizontal-stretch: 1;
             background: Theme.app-bg;

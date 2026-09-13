@@ -38,8 +38,19 @@ impl Discovery {
         port:          u16,
     ) -> anyhow::Result<Self> {
         let mdns = ServiceDaemon::new().context("start mDNS daemon")?;
+        Self::register_service(&mdns, instance_name, peer_id, display_name, port)?;
+        let receiver = Self::browse_services(&mdns)?;
 
-        // ── Advertise ──────────────────────────────────────────────────────────
+        Ok(Self { mdns, receiver })
+    }
+
+    fn register_service(
+        mdns: &ServiceDaemon,
+        instance_name: &str,
+        peer_id: &str,
+        display_name: &str,
+        port: u16,
+    ) -> anyhow::Result<()> {
         let mut props = HashMap::new();
         props.insert("id".to_string(), peer_id.to_string());
         props.insert("display_name".to_string(), display_name.to_string());
@@ -55,12 +66,13 @@ impl Discovery {
 
         mdns.register(service).context("mDNS register")?;
         info!("mDNS: advertising as '{instance_name}' ({display_name}) on port {port}");
+        Ok(())
+    }
 
-        // ── Browse ─────────────────────────────────────────────────────────────
+    fn browse_services(mdns: &ServiceDaemon) -> anyhow::Result<mdns_sd::Receiver<ServiceEvent>> {
         let receiver = mdns.browse(SERVICE_TYPE).context("mDNS browse")?;
         info!("mDNS: browsing for peers on '{SERVICE_TYPE}'");
-
-        Ok(Self { mdns, receiver })
+        Ok(receiver)
     }
 
     /// Dynamically update the advertised display name on the LAN.

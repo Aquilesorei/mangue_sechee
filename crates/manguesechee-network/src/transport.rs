@@ -16,7 +16,6 @@ use tokio::{
 
 const MAX_FRAME: usize = 64 * 1024 * 1024; // 64 MiB — large enough for FileTransferOffer with thousands of entries
 
-// ── Shared framing helpers ────────────────────────────────────────────────────
 
 async fn write_msg(w: &mut (impl AsyncWriteExt + Unpin), msg: &Message) -> anyhow::Result<()> {
     let bytes = bincode::serde::encode_to_vec(msg, bincode::config::standard())
@@ -39,7 +38,6 @@ async fn read_msg(r: &mut (impl AsyncReadExt + Unpin)) -> anyhow::Result<Message
     Ok(msg)
 }
 
-// ── Full-duplex transport (used during handshake) ─────────────────────────────
 
 #[async_trait]
 pub trait Transport: Send {
@@ -227,7 +225,6 @@ impl Transport for TcpTransport {
     }
 }
 
-// ── Split halves ──────────────────────────────────────────────────────────────
 
 pub enum StreamWriter {
     Plain(OwnedWriteHalf),

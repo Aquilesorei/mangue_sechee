@@ -1,4 +1,3 @@
-//! Unix socket IPC server — lets the GUI control the running agent.
 
 use anyhow::Context;
 use manguesechee_core::ipc::{self, AgentEvent, GuiCommand, PeerInfo};

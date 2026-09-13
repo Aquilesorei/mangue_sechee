@@ -69,7 +69,6 @@ pub fn opposite_position(pos: &str) -> &'static str {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    // ── Phase 1 ──────────────────────────────────────────────────────────────
     Ping,
     Pong,
     Identity {
@@ -84,16 +83,13 @@ pub enum Message {
         display_name: String,
     },
 
-    // ── TLS Negotiation ───────────────────────────────────────────────────────
     /// Sent immediately on connection to negotiate TLS upgrade.
     StartTls { requested: bool },
     /// Responder answers whether it accepts upgrading to TLS.
     StartTlsAck { accept: bool },
 
-    // ── Phase 2/3 ─────────────────────────────────────────────────────────────
     InputEvent(InputEvent),
 
-    // ── Phase 4 ──────────────────────────────────────────────────────────────
     EdgeCrossed   {
         edge: Edge,
         #[serde(default)]
@@ -105,7 +101,6 @@ pub enum Message {
         ratio: Option<f32>,
     },
 
-    // ── Phase 5 — pairing ─────────────────────────────────────────────────────
     /// Initiator sends its identity + a 6-digit verification code.
     PairRequest  {
         name: String,
@@ -125,17 +120,14 @@ pub enum Message {
     /// Responder rejected the pairing attempt.
     PairRejected { reason: String },
 
-    // ── Phase 7 — clipboard ───────────────────────────────────────────────────
     /// Sent whenever the active controller's clipboard text changes.
     ClipboardSync { text: String },
 
-    // ── Screen Topology Synchronization ──────────────────────────────────────
     /// Synchronizes monitor layout across machines.
     /// `position` specifies where the receiver screen is located relative to the sender screen.
     /// Receiver automatically sets the sender to the complementary opposite position.
     TopologySync { position: String },
 
-    // ── Phase 8 — File Transfer ───────────────────────────────────────────────
     /// Informs the peer whether local file transfers are enabled or disabled.
     FileTransferStatus { enabled: bool },
 

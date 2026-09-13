@@ -30,7 +30,6 @@ export component PeersView inherits VerticalBox {
     spacing: 12px;
     vertical-stretch: 1;
 
-    // ── Machine & Network Status Overview Card ───────────────────────────────
     Rectangle {
         height: 68px;
         background: Theme.surface-card;
@@ -87,7 +86,6 @@ export component PeersView inherits VerticalBox {
         }
     }
 
-    // ── Connection Success Banner ────────────────────────────────────────────
     if root.connected-peer != "" && !root.topology-configured : Rectangle {
         background: Theme.success-bg;
         border-radius: 8px;
@@ -154,7 +152,6 @@ export component PeersView inherits VerticalBox {
         }
     }
 
-    // ── Topology Synced Notice Banner ────────────────────────────────────────
     if root.connected-peer != "" && root.topology-configured && root.topology-notice != "" : Rectangle {
         background: Theme.accent-subtle;
         border-radius: 8px;
@@ -200,7 +197,6 @@ export component PeersView inherits VerticalBox {
         }
     }
 
-    // ── Connection Error Banner ──────────────────────────────────────────────
     if root.connection-error != "" : Rectangle {
         background: Theme.error-bg;
         border-radius: 8px;
@@ -242,7 +238,6 @@ export component PeersView inherits VerticalBox {
         }
     }
 
-    // ── Discovered & Configured Peers List ───────────────────────────────────
     GroupBox {
         title: "Known & Discovered Peers";
         vertical-stretch: 1;

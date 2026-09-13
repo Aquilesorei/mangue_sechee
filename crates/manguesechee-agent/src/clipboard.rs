@@ -1,9 +1,3 @@
-//! Clipboard sync.
-//!
-//! Provides bidirectional clipboard synchronization between controller and peer.
-//! Supports Wayland (via arboard with wayland-data-control and wl-clipboard) and X11.
-//!
-//! Automatically avoids echo/feedback loops by tracking the last synchronized content.
 
 use arboard::Clipboard;
 use manguesechee_core::protocol::Message;

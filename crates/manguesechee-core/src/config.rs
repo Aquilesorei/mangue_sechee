@@ -37,7 +37,6 @@ impl Default for Config {
     }
 }
 
-// ── Sub-sections ──────────────────────────────────────────────────────────────
 
 fn default_display_name() -> String {
     crate::names::generate_random_name()
@@ -267,7 +266,6 @@ impl PeerConfig {
     }
 }
 
-// ── Load / save ───────────────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
     dirs::config_dir()

@@ -1,8 +1,3 @@
-//! Dedicated background and fast-path file transfer engine.
-//!
-//! - Files <= 15 MB: Streamed inline in 64 KiB chunks over the primary connection.
-//! - Files > 15 MB: Streamed over a dedicated secondary TCP connection on port 24800,
-//!   preventing input jitter and firing `notify-send` when ready to paste.
 
 use anyhow::Context;
 use manguesechee_core::ipc::{FileTransferInfo, TransferHistoryEntry};

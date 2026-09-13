@@ -16,7 +16,6 @@ fn syn() -> EvdevEvent {
 
 use std::collections::HashSet;
 
-// ── MouseInjector ─────────────────────────────────────────────────────────────
 
 pub struct MouseInjector {
     device:       evdev::uinput::VirtualDevice,
@@ -115,7 +114,6 @@ impl Drop for MouseInjector {
     }
 }
 
-// ── KeyboardInjector ──────────────────────────────────────────────────────────
 
 pub struct KeyboardInjector {
     device:    evdev::uinput::VirtualDevice,

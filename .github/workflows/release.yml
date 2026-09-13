@@ -41,15 +41,17 @@ jobs:
         run: ./dist/package.sh --rpm
 
       - name: Inspect generated artifacts
-        run: ls -la dist/*.deb dist/*.rpm
+        run: |
+          find dist -maxdepth 2 -type f \( -name "*.deb" -o -name "*.rpm" \) -exec ls -lh {} +
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           files: |
             dist/*.deb
             dist/*.rpm
+            dist/*/*.rpm
           generate_release_notes: true
           draft: false
           prerelease: false

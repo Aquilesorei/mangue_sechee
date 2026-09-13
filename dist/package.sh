@@ -243,6 +243,11 @@ EOF
 
   local OUT
   OUT=$(find "$DIST_DIR" -name "manguesechee-*.rpm" | sort | tail -1)
+  if [[ -n "$OUT" && "$(dirname "$OUT")" != "$DIST_DIR" ]]; then
+    mv "$OUT" "$DIST_DIR/"
+    rmdir "$(dirname "$OUT")" 2>/dev/null || true
+    OUT="$DIST_DIR/$(basename "$OUT")"
+  fi
   echo ""
   echo "==> Package: $OUT"
   du -h "$OUT"

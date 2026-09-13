@@ -1,26 +1,9 @@
-//! Pairing state and known-peers store.
-//!
-//! First connection flow:
-//!
-//!   Initiator                          Responder
-//!   ─────────────────────────────────────────────
-//!   PairRequest(name, id, code) ──────►
-//!                                      show code to user
-//!                                      user accepts
-//!                              ◄────── PairAccepted(name, id, code)
-//!   verify code matches ✓
-//!   both sides save each other's id
-//!   normal session begins
-//!
-//! Known peers are persisted in `~/.config/manguesechee/known_peers.json`.
-
 use anyhow::Context;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::info;
 
-// ── Known peers store ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KnownPeers {
@@ -72,7 +55,6 @@ pub fn save_known_peers(peers: &KnownPeers) -> anyhow::Result<()> {
     std::fs::write(&path, text).context("write known_peers.json")
 }
 
-// ── Pairing code ──────────────────────────────────────────────────────────────
 
 /// Generate a random 6-digit verification code like "482 731".
 pub fn generate_code() -> String {
@@ -80,7 +62,6 @@ pub fn generate_code() -> String {
     format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
-// ── Pairing prompt (terminal) ─────────────────────────────────────────────────
 
 /// Block on stdin and ask the user to accept or reject a pairing request.
 /// In daemon mode (no terminal attached), automatically accepts the request and logs it.

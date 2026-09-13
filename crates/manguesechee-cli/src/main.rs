@@ -1,8 +1,3 @@
-//! manguesechee-cli — Command-line interface for Manguesechee KVM.
-//!
-//! Provides instant terminal commands for status inspection, peer connection,
-//! cursor locking, screen switching, 2D topology management, and file transfers.
-//! Supports JSON and Waybar custom module formatting for bar widgets and scripts.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -247,7 +242,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-// ── IPC Helpers ──────────────────────────────────────────────────────────────
 
 fn connect_ipc() -> Result<UnixStream> {
     let path = ipc::socket_path();
@@ -291,7 +285,6 @@ fn daemon_alive() -> (bool, Option<i32>) {
     (alive, if alive { Some(pid) } else { None })
 }
 
-// ── Command Handlers ─────────────────────────────────────────────────────────
 
 fn print_status(json: bool, waybar: bool) -> Result<()> {
     let (alive, pid) = daemon_alive();

@@ -1,7 +1,3 @@
-//! File clipboard parsing and injection.
-//!
-//! Translates between Linux file manager clipboard formats (`text/uri-list`,
-//! `x-special/gnome-copied-files`) and local disk paths.
 
 use manguesechee_core::protocol::FileInfo;
 use std::path::{Path, PathBuf};
