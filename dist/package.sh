@@ -137,7 +137,7 @@ Version: $VERSION
 Architecture: $ARCH_DEB
 Maintainer: $MAINTAINER
 Depends: libc6
-Recommends: wl-clipboard, xclip
+Recommends: wl-clipboard, xclip, libnotify-bin
 Description: $DESCRIPTION
 Homepage: $URL
 EOF
@@ -187,6 +187,7 @@ Summary:        $DESCRIPTION
 License:        $LICENSE
 URL:            $URL
 BuildArch:      $ARCH_RPM
+Recommends:     wl-clipboard, xclip, libnotify
 
 %description
 $DESCRIPTION

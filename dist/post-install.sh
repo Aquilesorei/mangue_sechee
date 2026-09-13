@@ -104,6 +104,10 @@ if command -v dnf &>/dev/null; then
 elif command -v apt-get &>/dev/null; then
     apt-get update -qq 2>/dev/null || true
     apt-get install -y wl-clipboard xclip libnotify-bin 2>/dev/null || true
+elif command -v pacman &>/dev/null; then
+    pacman -S --noconfirm --needed wl-clipboard xclip libnotify 2>/dev/null || true
+elif command -v zypper &>/dev/null; then
+    zypper install -y wl-clipboard xclip libnotify-tools 2>/dev/null || true
 fi
 
 

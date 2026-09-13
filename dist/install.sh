@@ -78,6 +78,14 @@ case "$FORMAT" in
     if ! pkg-config --exists xkbcommon 2>/dev/null; then
       apt-get install -y libxkbcommon-dev 2>/dev/null || true
     fi
+    if ! command -v notify-send &>/dev/null; then
+      echo "==> Installing notification tool (notify-send)…"
+      apt-get install -y libnotify-bin 2>/dev/null || true
+    fi
+    if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null; then
+      echo "==> Installing clipboard tools (wl-clipboard, xclip)…"
+      apt-get install -y wl-clipboard xclip 2>/dev/null || true
+    fi
     check_tool cargo    cargo   || true  # Rust installed separately
     ;;
   rpm)
@@ -89,6 +97,14 @@ case "$FORMAT" in
     fi
     if ! pkg-config --exists xkbcommon 2>/dev/null; then
       dnf install -y libxkbcommon-devel 2>/dev/null || true
+    fi
+    if ! command -v notify-send &>/dev/null; then
+      echo "==> Installing notification tool (notify-send)…"
+      dnf install -y libnotify 2>/dev/null || true
+    fi
+    if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null; then
+      echo "==> Installing clipboard tools (wl-clipboard, xclip)…"
+      dnf install -y wl-clipboard xclip 2>/dev/null || true
     fi
     check_tool cargo    cargo   || true
     ;;

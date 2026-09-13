@@ -69,6 +69,18 @@ if ! command -v wl-copy &>/dev/null || ! command -v xclip &>/dev/null || ! comma
         else
             sudo dnf install -y wl-clipboard xclip libnotify 2>/dev/null || true
         fi
+    elif command -v pacman &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            pacman -S --noconfirm --needed wl-clipboard xclip libnotify 2>/dev/null || true
+        else
+            sudo pacman -S --noconfirm --needed wl-clipboard xclip libnotify 2>/dev/null || true
+        fi
+    elif command -v zypper &>/dev/null; then
+        if [[ "$EUID" -eq 0 ]]; then
+            zypper install -y wl-clipboard xclip libnotify-tools 2>/dev/null || true
+        else
+            sudo zypper install -y wl-clipboard xclip libnotify-tools 2>/dev/null || true
+        fi
     fi
 fi
 
