@@ -134,6 +134,11 @@ fn collect_dir_entries(
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_symlink() && path.is_dir() {
+                    continue;
+                }
+            }
             let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let rel = format!("{rel_prefix}/{file_name}");
             if path.is_file() {

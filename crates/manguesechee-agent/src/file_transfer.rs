@@ -38,7 +38,7 @@ pub struct ActiveReceiver {
     pub total_size: u64,
     pub bytes_received: u64,
     pub is_background: bool,
-    open_files: Vec<Option<File>>,
+    current_file: Option<(usize, File)>,
 }
 
 impl ActiveReceiver {
@@ -52,8 +52,6 @@ impl ActiveReceiver {
         std::fs::create_dir_all(&staging)?;
 
         let mut disk_paths = Vec::with_capacity(files.len());
-        let mut open_files = Vec::with_capacity(files.len());
-
         for file in &files {
             let safe_rel = if let Some(ref rel) = file.relative_path {
                 sanitize_relative_path(rel)
@@ -61,19 +59,7 @@ impl ActiveReceiver {
                 sanitize_relative_path(&file.filename)
             };
             let dest = staging.join(safe_rel);
-            if let Some(parent) = dest.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-
-            let f = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&dest)
-                .with_context(|| format!("create {}", dest.display()))?;
-
             disk_paths.push(dest);
-            open_files.push(Some(f));
         }
 
         Ok(Self {
@@ -83,7 +69,7 @@ impl ActiveReceiver {
             total_size,
             bytes_received: 0,
             is_background,
-            open_files,
+            current_file: None,
         })
     }
 
@@ -93,21 +79,40 @@ impl ActiveReceiver {
         offset: u64,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        if let Some(Some(f)) = self.open_files.get_mut(file_index) {
-            f.seek(SeekFrom::Start(offset))?;
-            f.write_all(data)?;
-            self.bytes_received += data.len() as u64;
-            Ok(())
-        } else {
-            anyhow::bail!("file index {file_index} not open");
-        }
+        let dest = self
+            .disk_paths
+            .get(file_index)
+            .ok_or_else(|| anyhow::anyhow!("file index {file_index} out of bounds"))?;
+
+        let file = match self.current_file {
+            Some((idx, ref mut f)) if idx == file_index => f,
+            _ => {
+                if let Some((_, mut f)) = self.current_file.take() {
+                    let _ = f.flush();
+                }
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let f = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(offset == 0)
+                    .open(dest)
+                    .with_context(|| format!("create {}", dest.display()))?;
+                self.current_file = Some((file_index, f));
+                &mut self.current_file.as_mut().unwrap().1
+            }
+        };
+
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(data)?;
+        self.bytes_received += data.len() as u64;
+        Ok(())
     }
 
     pub fn finish(mut self) -> anyhow::Result<(Vec<PathBuf>, bool, String, u64)> {
-        for f in self.open_files.iter_mut() {
-            if let Some(mut file) = f.take() {
-                let _ = file.flush();
-            }
+        if let Some((_, mut f)) = self.current_file.take() {
+            let _ = f.flush();
         }
         let first_name = self.files.first().map(|f| f.filename.clone()).unwrap_or_else(|| "file".into());
 
@@ -339,7 +344,7 @@ pub async fn send_fast_transfer(
                 }
             }
 
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }
     }
 
@@ -440,7 +445,7 @@ pub async fn send_fast_transfer_to_channel(
                 }
             }
 
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }
     }
 
@@ -606,7 +611,9 @@ async fn run_background_stream(
                 }
             }
 
-            tokio::task::yield_now().await;
+            // Pace transmission to prevent bufferbloat and Wi-Fi congestion.
+            // 64 KiB every 2 ms (~32 MB/s) leaves network queues free for real-time mouse/keyboard packets.
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     }
 
