@@ -1128,7 +1128,7 @@ async fn run_client_event_loop(ctx: ClientLoopContext<'_>) -> anyhow::Result<()>
                                 hotkey_matcher.reset_modifiers();
                                 let return_edge = exit_edge.opposite();
                                 edge.place_at_entry_ratio(&return_edge, ratio);
-                                edge.arm_cooldown(Duration::from_millis(600));
+                                edge.arm_cooldown(Duration::from_millis(1500));
                             } else {
                                 info!("← ReturnControl ({exit_edge:?}, ratio={ratio:?}) traversing from {active_coord:?} to adjacent screen at {next_coord:?}");
                                 active_coord = next_coord;
